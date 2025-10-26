@@ -91,3 +91,40 @@ Notes and tips
 - For debugging, set the constructor flag to $true to run in a windowed,
   non-topmost mode and see console output.
   
+How to Run This Project (Step-by-Step for Beginners)
+If you're new to PowerShell or GitHub, don't worry — follow these steps and you'll be up and running in no time!
+
+1. 📥 Download the Project
+Go to the GitHub page for this project.
+Click the green Code button.
+Select Download ZIP.
+Once downloaded, unzip the file to a folder on your computer (e.g., your Desktop).
+
+2. 🧭 Open PowerShell
+Press Windows + S and type PowerShell.
+Click on Windows PowerShell to open it.
+
+3. 📂 Navigate to the Project Folder
+In PowerShell, type the following command to go to the folder where you unzipped the project:
+
+powershell
+cd "C:\Users\YourName\Desktop\YourProjectFolder"
+Replace the path with the actual location of your folder.
+
+4. 📝 Customize Your Schedule
+Open the file called schedule.csv using Excel or Notepad.
+Add your kids' names and the schedule you want to use.
+Save the file when you're done.
+
+5. 🚀 Run the Script
+In PowerShell, run the script by typing:
+powershell
+.\bad_kids.ps1
+If you get a security warning, you may need to enable script execution. Type this first:
+powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+Then run the script again.
+
+6. 🖱️ Interact and Exit
+Follow any on-screen instructions.
+Click anywhere on the screen to exit the program when you're done.
