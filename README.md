@@ -41,6 +41,9 @@ High-level behavior
   moves the main panel around the screen.
 - When a scheduled task falls within a short trigger window it is logged,
   optionally spoken via the SpeechSynthesizer, and an on-screen alert is shown.
+- When the program starts running, it immediately lowers the computer volume.
+  This allows the program to run overnight without fear of Windows Updates
+  or anything else making noise and waking up the family.
 
 Key fields
 - $Schedule (array): Raw tasks loaded from CSV. Each task has Time, Name,
