@@ -1,4 +1,4 @@
-﻿using namespace System.Windows.Forms
+using namespace System.Windows.Forms
 using namespace System.Drawing
 using namespace System.Speech.Synthesis
 using namespace System.Globalization
@@ -111,6 +111,8 @@ class SchedulerScreenSaver {
     [Label]$ExitLabel
     [Label]$AlertLabel
     [bool]$DebugMode = $false  # Debug mode flag
+    [bool]$AutoMuteDuringSpeech = $true
+    [bool]$IsSpeaking = $false
     [array]$Schedule
     [hashtable]$TaskState
     [hashtable]$PersonTaskPanels
@@ -128,7 +130,14 @@ class SchedulerScreenSaver {
 
     SchedulerScreenSaver([bool]$debug = $false) {
         Write-Host "Creating form (Debug Mode: $debug)"
-        $this.DebugMode = $false
+        $this.DebugMode = $debug
+        # Ensure volume starts at 0
+        try {
+            [Audio]::SetVolume(0.0)
+        }
+        catch {
+            Write-Host "Error setting initial volume: $($_.Exception.Message)"
+        }
 
         $this.InitializeComponents()
         $this.LoadSchedule()
@@ -177,6 +186,48 @@ class SchedulerScreenSaver {
 
         # Speech synthesizer
         $this.SpeechSynth = [SpeechSynthesizer]::new()
+        # Wire automatic mute/unmute around speech if enabled
+        $owner = $this
+        try {
+            $this.SpeechSynth.add_SpeakStarted({ param($s, $e)
+                    try {
+                        if ($owner.AutoMuteDuringSpeech) {
+                            [Audio]::SetVolume(1.0)
+                            $owner.IsSpeaking = $true
+                        }
+                    }
+                    catch {
+                        Write-Host "Warning: failed to unmute for speech: $($_.Exception.Message)"
+                    }
+                })
+
+            $this.SpeechSynth.add_SpeakCompleted({ param($s, $e)
+                    try {
+                        if ($owner.AutoMuteDuringSpeech) {
+                            [Audio]::SetVolume(0.0)
+                            $owner.IsSpeaking = $false
+                        }
+                    }
+                    catch {
+                        Write-Host "Warning: failed to mute after speech: $($_.Exception.Message)"
+                    }
+                })
+        }
+        catch {
+            Write-Host "Speech event hookup failed: $($_.Exception.Message)"
+        }
+
+        # Start muted when running normally (not in debug) so unexpected system sounds don't wake people
+        if ($this.AutoMuteDuringSpeech ) {
+            try {
+                if ($this.DebugMode -eq $false) {
+                    [Audio]::SetVolume(0.0)
+                }
+            }
+            catch { 
+                Write-Host "Initial mute failed: $($_.Exception.Message)"
+            }
+        }
 
         # Main panel for static info
         $this.MainPanel = [Panel]::new()
@@ -210,7 +261,7 @@ class SchedulerScreenSaver {
         $this.LastTaskLabel.ForeColor = [Color]::LightGreen
         $this.LastTaskLabel.AutoSize = $true
         $this.LastTaskLabel.Location = [Point]::new(0, 110)
-        $this.LastTaskLabel.Text = "Last: No Previous Tasks"
+        $this.LastTaskLabel.Text = "Please wait..."
 
         $this.NextTaskLabel = [Label]::new()
         $this.NextTaskLabel.Font = $smallFont
@@ -241,6 +292,31 @@ class SchedulerScreenSaver {
         $this.Form.Controls.Add($this.MainPanel)
         $this.Form.Controls.Add($this.AlertLabel)
 
+        # Ensure we attempt to mute after the form is shown (avoids early startup race
+        # where audio subsystems may not yet be ready). Retry once if it fails.
+        $this.Form.Add_Shown({ param($s, $e)
+                $owner = $s.tag
+                if ($owner.AutoMuteDuringSpeech) {
+                    try {
+
+                            if ($this.DebugMode -eq $false) {
+                                [Audio]::SetVolume(0.0)
+                            } 
+
+                    }
+                    catch {
+                        Write-Host "Initial mute failed on Shown; retrying: $($_.Exception.Message)"
+                        Start-Sleep -Milliseconds 200
+                        try {
+                            [Audio]::SetVolume(0.0) 
+                        }
+                        catch { 
+                            Write-Host "Retry mute failed: $($_.Exception.Message)" 
+                        }
+                    }
+                }
+            })
+
         # Initialize person task panels hashtable
         $this.PersonTaskPanels = @{}
     }
@@ -260,6 +336,7 @@ class SchedulerScreenSaver {
 
     [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
         Write-Host "Timer tick"
+        
         try {
             $now = [DateTime]::Now
             
@@ -267,6 +344,10 @@ class SchedulerScreenSaver {
             if ($this.LastScheduleLoad.Date -ne $now.Date) {
                 Write-Host "New day detected - reloading schedule"
                 $this.LoadSchedule()
+            }
+
+            if ($this.LastTaskLabel.Text.Equals("Please wait...", [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                $this.LastTaskLabel.Text = "Last: No Previous Tasks"
             }
 
             # Update time display
@@ -427,7 +508,9 @@ class SchedulerScreenSaver {
 
             try {
                 $timeDiffSeconds = ($now - $taskDateTime).TotalSeconds
-                Write-Host "Checking task '$($task.Action)' at $($task.Time), diff: $timeDiffSeconds seconds"
+                if ($this.DebugMode) {
+                    Write-Host "Checking task '$($task.Action)' at $($task.Time), diff: $timeDiffSeconds seconds"
+                }
 
                 # If the task is more than 60 seconds in the past, mark it completed and stop checking it
                 if ($timeDiffSeconds -gt 60) {
@@ -487,7 +570,15 @@ class SchedulerScreenSaver {
 
                     # Speak alert
                     $speechText = "It is $($now.ToString("h:mm tt")). $alertMessage"  # 12-hour for speech
-                    $this.SpeechSynth.SpeakAsync($speechText)
+                    write-host "Speaking: $speechText"
+                    # Set volume to max, speak, then set back to 0
+                    try {
+                        [Audio]::SetVolume(1.0) 
+                        $this.SpeechSynth.SpeakAsync($speechText)  # Synchronous speak
+                    }
+                    catch {
+                        Write-Host "Error during speech/volume control: $($_.Exception.Message)"
+                    }
 
                     # Mark as called/completed to avoid re-triggering
                     $this.TodaysTasks[$taskKey].Called = $true
@@ -784,6 +875,10 @@ class SchedulerScreenSaver {
             # Dispose speech synthesizer
             try {
                 if ($this.SpeechSynth) {
+                    # Ensure we leave audio unmuted when exiting
+                    if ($this.AutoMuteDuringSpeech) {
+                        [Audio]::SetVolume(1.0) 
+                    } 
                     $this.SpeechSynth.Dispose()
                 }
             }
