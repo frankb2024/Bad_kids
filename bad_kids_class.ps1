@@ -281,7 +281,7 @@ class SchedulerScreenSaver {
         try {
             Write-Host "Initializing timer"
             $this.Timer = [Timer]::new()
-            $this.Timer.Interval = 1000  # Check every second
+            $this.Timer.Interval = 5000  # Check every second
             $this.Timer.tag = $this
             $this.Timer.Add_Tick({ 
                     param($sender, $e)
@@ -834,8 +834,8 @@ class SchedulerScreenSaver {
             $this.PersonTaskPanels = @{}
             # Setup layout constants for 3 columns
             $panelWidth = 300
-            $maxPerColumn = 3
-            $columnGap = 40
+            $maxPerColumn = 2
+            $columnGap = 20
             $leftX = 10
             $middleX = $leftX + $panelWidth + $columnGap
             $rightX = $middleX + $panelWidth + $columnGap
