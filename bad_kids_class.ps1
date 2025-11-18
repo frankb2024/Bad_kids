@@ -438,6 +438,8 @@ class SchedulerScreenSaver {
         }
     }
 
+    
+
     [array]GetUnusedIndices([array]$items, [string]$trackerFile) {
         try {
             if ($items.Count -eq 0) { return @() }
@@ -539,7 +541,53 @@ class SchedulerScreenSaver {
                 $stateData = Import-Csv -Path $this.StateFile
                 foreach ($item in $stateData) {
                     try {
-                        $this.TaskState[$item.TaskKey] = $item.NextPerson
+                        $rawKey = $item.TaskKey.ToString().Trim()
+                        $nextPerson = $item.NextPerson.ToString().Trim()
+                        # If rawKey already looks like Time|Days|Action (3 parts), use it as-is
+                        $parts = $rawKey -split '\|'
+                        if ($parts.Count -eq 3) {
+                            $normalized = "$($parts[0].Trim())|$($parts[1].Trim())|$($parts[2].Trim())"
+                            $this.TaskState[$normalized] = $nextPerson
+                            continue
+                        }
+
+                        # Migration: older keys may omit Time (e.g., Days|Action or just Action).
+                        # Map such keys to all matching schedule entries by Action and optional DaysOfWeek.
+                        $mapped = $false
+                        if ($this.Schedule -and $this.Schedule.Count -gt 0) {
+                            foreach ($sched in $this.Schedule) {
+                                try {
+                                    $schedAction = $sched.Action.ToString().Trim()
+                                    $schedDays = $sched.DaysOfWeek.ToString().Trim()
+                                    # If rawKey contains both days and action separated by '|', try to match
+                                    if ($rawKey -match '\|') {
+                                        $rparts = $rawKey -split '\|'
+                                        $rDays = $rparts[0].Trim()
+                                        $rAction = $rparts[1].Trim()
+                                        if ($schedAction.Equals($rAction, [System.StringComparison]::InvariantCultureIgnoreCase) -and $schedDays.Equals($rDays, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                            $rotationKey = "$($sched.Time.ToString().Trim())|$schedDays|$schedAction"
+                                            $this.TaskState[$rotationKey] = $nextPerson
+                                            $mapped = $true
+                                        }
+                                    }
+                                    else {
+                                        # rawKey likely only contains action text; match by action (case-insensitive)
+                                        if ($schedAction.Equals($rawKey, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                            $rotationKey = "$($sched.Time.ToString().Trim())|$schedDays|$schedAction"
+                                            $this.TaskState[$rotationKey] = $nextPerson
+                                            $mapped = $true
+                                        }
+                                    }
+                                }
+                                catch {
+                                    continue
+                                }
+                            }
+                        }
+                        if (-not $mapped) {
+                            # As a fallback, just store the raw key so it's not lost
+                            $this.TaskState[$rawKey] = $nextPerson
+                        }
                     }
                     catch {
                         Write-Host "ERROR loading task state item - TaskKey: '$($item.TaskKey)': $($_.Exception.Message)"
@@ -557,10 +605,67 @@ class SchedulerScreenSaver {
         try {
             Write-Host "Saving task state to $($this.StateFile)"
             $stateArray = @()
+            # Normalize and expand keys before writing so saved keys follow the canonical
+            # Time|DaysOfWeek|Action format. If an older/raw key maps to multiple schedule
+            # entries (same Action across times), expand it to each matching rotation key.
+            $written = @{}
             foreach ($key in $this.TaskState.Keys) {
-                $stateArray += [PSCustomObject]@{
-                    TaskKey    = $key
-                    NextPerson = $this.TaskState[$key]
+                $value = $this.TaskState[$key]
+                $rawKey = $key.ToString().Trim()
+                $parts = $rawKey -split '\|'
+                $mapped = $false
+
+                if ($parts.Count -eq 3) {
+                    $normalized = "$($parts[0].Trim())|$($parts[1].Trim())|$($parts[2].Trim())"
+                    if (-not $written.ContainsKey($normalized)) {
+                        $stateArray += [PSCustomObject]@{ TaskKey = $normalized; NextPerson = $value }
+                        $written[$normalized] = $true
+                    }
+                    continue
+                }
+
+                # Try to map older/raw keys to schedule entries
+                if ($this.Schedule -and $this.Schedule.Count -gt 0) {
+                    foreach ($sched in $this.Schedule) {
+                        try {
+                            $schedAction = $sched.Action.ToString().Trim()
+                            $schedDays = $sched.DaysOfWeek.ToString().Trim()
+                            if ($rawKey -match '\|') {
+                                $rparts = $rawKey -split '\|'
+                                $rDays = $rparts[0].Trim()
+                                $rAction = $rparts[1].Trim()
+                                if ($schedAction.Equals($rAction, [System.StringComparison]::InvariantCultureIgnoreCase) -and $schedDays.Equals($rDays, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                    $rotationKey = "$($sched.Time.ToString().Trim())|$schedDays|$schedAction"
+                                    if (-not $written.ContainsKey($rotationKey)) {
+                                        $stateArray += [PSCustomObject]@{ TaskKey = $rotationKey; NextPerson = $value }
+                                        $written[$rotationKey] = $true
+                                    }
+                                    $mapped = $true
+                                }
+                            }
+                            else {
+                                if ($schedAction.Equals($rawKey, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                    $rotationKey = "$($sched.Time.ToString().Trim())|$schedDays|$schedAction"
+                                    if (-not $written.ContainsKey($rotationKey)) {
+                                        $stateArray += [PSCustomObject]@{ TaskKey = $rotationKey; NextPerson = $value }
+                                        $written[$rotationKey] = $true
+                                    }
+                                    $mapped = $true
+                                }
+                            }
+                        }
+                        catch {
+                            continue
+                        }
+                    }
+                }
+
+                if (-not $mapped) {
+                    # Fallback: write raw key as-is
+                    if (-not $written.ContainsKey($rawKey)) {
+                        $stateArray += [PSCustomObject]@{ TaskKey = $rawKey; NextPerson = $value }
+                        $written[$rawKey] = $true
+                    }
                 }
             }
             # Write atomically to avoid partial writes.
@@ -732,7 +837,7 @@ class SchedulerScreenSaver {
                         Write-Host "Speaking: $speechText"
                         try {
                             [Audio]::SetVolume($this.SpeechVolume)
-                            $this.SpeechSynth.SpeakAsync($speechText)
+                            $this.SpeechSynth.Speak($speechText)
                         }
                         catch {
                             Write-Host "Error during speech/volume control: $($_.Exception.Message)"
@@ -899,13 +1004,20 @@ class SchedulerScreenSaver {
                                 $assigned = $names[0]
                                 if ($this.TaskState.ContainsKey($rotationKey)) {
                                     $lastPerson = $this.TaskState[$rotationKey]
-                                    $currentIndex = [Array]::IndexOf($names, $lastPerson)
-                                    if ($currentIndex -eq -1 -or $currentIndex -ge $names.Count - 1) {
+                                    if ($null -ne $lastPerson) { $lastPerson = $lastPerson.ToString().Trim() }
+                                    $currentIndex = -1
+                                    for ($i = 0; $i -lt $names.Count; $i++) {
+                                        if ($names[$i].Equals($lastPerson, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                            $currentIndex = $i
+                                            break
+                                        }
+                                    }
+                                    if ($currentIndex -eq -1 -or $currentIndex -ge ($names.Count - 1)) {
                                         $assigned = $names[0]
                                     }
                                     else {
                                         $assigned = $names[$currentIndex + 1]
-                                    }bad
+                                    }
                                 }
                                 if ($assigned -eq $person) {
                                     $personTasks += [PSCustomObject]@{
