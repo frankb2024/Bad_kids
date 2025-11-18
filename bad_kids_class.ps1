@@ -1,4 +1,5 @@
 
+
 using namespace System.Windows.Forms
 using namespace System.Drawing
 using namespace System.Speech.Synthesis
@@ -562,8 +563,22 @@ class SchedulerScreenSaver {
                     NextPerson = $this.TaskState[$key]
                 }
             }
+            # Write atomically to avoid partial writes.
+            $temp = "$($this.StateFile).tmp"
             if ($stateArray.Count -gt 0) {
-                $stateArray | Export-Csv -Path $this.StateFile -NoTypeInformation
+                $stateArray | Export-Csv -Path $temp -NoTypeInformation -Force
+                try {
+                    Move-Item -Path $temp -Destination $this.StateFile -Force
+                }
+                catch {
+                    # If move fails, attempt to write directly as fallback
+                    Write-Host "Warning: atomic move failed when saving task state: $($_.Exception.Message). Falling back to direct write."
+                    $stateArray | Export-Csv -Path $this.StateFile -NoTypeInformation -Force
+                }
+            }
+            else {
+                # No state to save; remove existing file if present
+                if (Test-Path $this.StateFile) { Remove-Item $this.StateFile -ErrorAction SilentlyContinue }
             }
         }
         catch {
@@ -647,21 +662,47 @@ class SchedulerScreenSaver {
                             $personForLog = "System"
                         }
                         else {
-                            $names = $task.Name -split ':'
-                            $person = $names[0]
-                            $rotationKey = "$($task.Time)|$($task.DaysOfWeek)|$($task.Action)"
+                            # Normalize names (trim whitespace) and build rotation key consistently
+                            $names = @()
+                            if (-not [string]::IsNullOrWhiteSpace($task.Name)) {
+                                $names = ($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                            }
+                            if ($names.Count -eq 0) {
+                                # No assigned person; treat as system task
+                                $person = "Unassigned"
+                            }
+                            else {
+                                $person = $names[0]
+                            }
+
+                            $timePart = $task.Time.ToString().Trim()
+                            $daysPart = $task.DaysOfWeek.ToString().Trim()
+                            $actionPart = $task.Action.ToString().Trim()
+                            $rotationKey = "$timePart|$daysPart|$actionPart"
+
                             if ($names.Count -gt 1) {
+                                if ($this.DebugMode) { Write-Host "RotationKey='$rotationKey'; Names=[$( $names -join ',' )]" }
                                 if ($this.TaskState.ContainsKey($rotationKey)) {
                                     $lastPerson = $this.TaskState[$rotationKey]
-                                    $currentIndex = [Array]::IndexOf($names, $lastPerson)
-                                    if ($currentIndex -eq -1 -or $currentIndex -eq $names.Count - 1) {
+                                    if ($null -ne $lastPerson) { $lastPerson = $lastPerson.ToString().Trim() }
+                                    # Find index case-insensitively
+                                    $currentIndex = -1
+                                    for ($i = 0; $i -lt $names.Count; $i++) {
+                                        if ($names[$i].Equals($lastPerson, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                            $currentIndex = $i
+                                            break
+                                        }
+                                    }
+                                    if ($this.DebugMode) { Write-Host "LastPerson='$lastPerson'; CurrentIndex=$currentIndex" }
+                                    if ($currentIndex -eq -1 -or $currentIndex -eq ($names.Count - 1)) {
                                         $person = $names[0]
                                     }
                                     else {
                                         $person = $names[$currentIndex + 1]
                                     }
                                 }
-                                $this.TaskState[$rotationKey] = $person
+                                # Store normalized person name
+                                $this.TaskState[$rotationKey] = $person.ToString().Trim()
                                 $this.SaveTaskState()
                             }
                             $alertMessage = "$person, $($task.Action)!"
@@ -864,7 +905,7 @@ class SchedulerScreenSaver {
                                     }
                                     else {
                                         $assigned = $names[$currentIndex + 1]
-                                    }
+                                    }bad
                                 }
                                 if ($assigned -eq $person) {
                                     $personTasks += [PSCustomObject]@{
