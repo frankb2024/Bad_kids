@@ -136,10 +136,36 @@ class SchedulerScreenSaver {
             $this.Form.tag = $this
             $this.Form.Add_KeyDown({ 
                     param($s, $e) 
-                    if ($e.KeyCode -eq [Keys]::Escape) { 
-                        $s.tag.CleanupAndExit()
-                        $s.Close()
-                    } })
+                    try {
+                        if ($e.KeyCode -eq [Keys]::Escape) { 
+                            $s.tag.CleanupAndExit()
+                            $s.Close()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::I) {
+                            # Inject a test scheduled task 30 seconds from now (frank:john)
+                            $s.tag.InjectScheduledTaskIn30Seconds()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::T) {
+                            # Inject a single-person task for Frank in 30 seconds
+                            $s.tag.InjectPersonTaskIn30Seconds('Frank')
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::J) {
+                            # Inject a joke-run in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('jokes')
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::W) {
+                            # Inject a wisdom quote in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('quotes')
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::Q) {
+                            # Inject a story in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('story')
+                        }
+                    }
+                    catch {
+                        Write-Host "KeyDown handler error: $($_.Exception.Message)"
+                    }
+                })
             # Add mouse click handler
             $this.Form.Add_MouseClick({
                     param($s, $e)
@@ -253,9 +279,9 @@ class SchedulerScreenSaver {
                     $owner = $s.tag
                     if ($owner.AutoMuteDuringSpeech) {
                         try {
-                                if ($this.DebugMode -eq $false) {
-                                    [Audio]::SetVolume(0.0)
-                                } 
+                            if ($this.DebugMode -eq $false) {
+                                [Audio]::SetVolume(0.0)
+                            } 
                         }
                         catch {
                             Write-Host "Initial mute failed on Shown; retrying: $($_.Exception.Message)"
@@ -405,7 +431,8 @@ class SchedulerScreenSaver {
             if (Test-Path $this.StoriesFile) {
                 $this.Stories = @(Import-Csv -Path $this.StoriesFile)
                 Write-Host "Loaded $($this.Stories.Count) stories"
-            } else {
+            }
+            else {
                 Write-Host "Warning: $($this.StoriesFile) not found"
                 $this.Stories = @()
             }
@@ -413,7 +440,8 @@ class SchedulerScreenSaver {
             if (Test-Path $this.QuotesFile) {
                 $this.Quotes = @(Import-Csv -Path $this.QuotesFile)
                 Write-Host "Loaded $($this.Quotes.Count) quotes"
-            } else {
+            }
+            else {
                 Write-Host "Warning: $($this.QuotesFile) not found"
                 $this.Quotes = @()
             }
@@ -428,7 +456,8 @@ class SchedulerScreenSaver {
             if (Test-Path $this.JokesFile) {
                 $this.Jokes = @(Import-Csv -Path $this.JokesFile)
                 Write-Host "Loaded $($this.Jokes.Count) jokes"
-            } else {
+            }
+            else {
                 Write-Host "Warning: $($this.JokesFile) not found"
                 $this.Jokes = @()
             }
@@ -497,6 +526,118 @@ class SchedulerScreenSaver {
         }
         catch {
             Write-Host "ERROR in RecordUsedJokeIndex (index=$index): $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+        }
+    }
+
+    [void]InjectScheduledTaskIn30Seconds() {
+        try {
+            $now = [DateTime]::Now
+            $due = $now.AddSeconds(30)
+            # Use the actual due time for display, but keep a fixed RotationAnchor so successive
+            # injections rotate between names consistently (RotationAnchor is used when
+            # determining rotation assignment)
+            $timeString = $due.ToString('HH:mm')
+            $rotationAnchor = "00:00"
+            $names = "frank:john"
+            $days = "Sunday-Saturday"
+            $action = "Injected Test"
+            $short = "Injected"
+
+            $taskObj = [PSCustomObject]@{
+                Time           = $timeString
+                Name           = $names
+                DaysOfWeek     = $days
+                Action         = $action
+                short_title    = $short
+                RotationAnchor = $rotationAnchor
+            }
+
+            # Create a unique dictionary key for TodaysTasks so multiple injections can coexist
+            $uniqueSuffix = $due.ToString("HHmmss")
+            $taskKey = "$($taskObj.Time)|$($taskObj.Name)|$($taskObj.Action)|$uniqueSuffix"
+
+            $this.TodaysTasks[$taskKey] = @{
+                Task      = $taskObj
+                DateTime  = $due
+                Completed = $false
+                Called    = $false
+            }
+
+            Write-Host "Injected scheduled task '$action' for [$names] at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+        }
+        catch {
+            Write-Host "ERROR in InjectScheduledTaskIn30Seconds: $($_.Exception.Message)"
+        }
+    }
+
+    [void]InjectPersonTaskIn30Seconds([string]$personName) {
+        try {
+            $now = [DateTime]::Now
+            $due = $now.AddSeconds(30)
+            $timeString = $due.ToString('HH:mm')
+            $names = $personName
+            $days = "Sunday-Saturday"
+            $action = "Injected Manual"
+            $short = "Injected"
+
+            $taskObj = [PSCustomObject]@{
+                Time        = $timeString
+                Name        = $names
+                DaysOfWeek  = $days
+                Action      = $action
+                short_title = $short
+            }
+
+            $uniqueSuffix = $due.ToString("HHmmss")
+            $taskKey = "$($taskObj.Time)|$($taskObj.Name)|$($taskObj.Action)|$uniqueSuffix"
+
+            $this.TodaysTasks[$taskKey] = @{
+                Task      = $taskObj
+                DateTime  = $due
+                Completed = $false
+                Called    = $false
+            }
+
+            Write-Host "Injected single-person task '$action' for [$names] at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+        }
+        catch {
+            Write-Host "ERROR in InjectPersonTaskIn30Seconds: $($_.Exception.Message)"
+        }
+    }
+
+    [void]InjectContentTaskIn30Seconds([string]$contentAction) {
+        try {
+            $now = [DateTime]::Now
+            $due = $now.AddSeconds(30)
+            $timeString = $due.ToString('HH:mm')
+            $names = ""
+            $days = "Sunday-Saturday"
+            # contentAction should be one of 'jokes','story','quotes'
+            $action = $contentAction
+            $short = "Injected $action"
+
+            $taskObj = [PSCustomObject]@{
+                Time        = $timeString
+                Name        = $names
+                DaysOfWeek  = $days
+                Action      = $action
+                short_title = $short
+            }
+
+            $uniqueSuffix = $due.ToString("HHmmss")
+            $taskKey = "$($taskObj.Time)|$($taskObj.Name)|$($taskObj.Action)|$uniqueSuffix"
+
+            $this.TodaysTasks[$taskKey] = @{
+                Task      = $taskObj
+                DateTime  = $due
+                Completed = $false
+                Called    = $false
+            }
+
+            Write-Host "Injected content task '$action' at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+        }
+        catch {
+            Write-Host "ERROR in InjectContentTaskIn30Seconds: $($_.Exception.Message)"
         }
     }
 
@@ -692,6 +833,17 @@ class SchedulerScreenSaver {
     }
 
     [void]CheckScheduledTasks() {
+        $helloTimer = [System.Windows.Forms.Timer]::new()
+                                $helloTimer.Add_Tick({ param($s, $ev)
+                                        try {
+                                            $s.Stop()
+                                            [Audio]::SetVolume(0.0)
+                                        }
+                                        catch {
+                                            Write-Host "HelloTimer tick error: $($_.Exception.Message)"
+                                        }
+                                    })
+                                    
         try {
             if ($this.DebugMode) { Write-Host "Checking scheduled tasks" }
             $now = [DateTime]::Now
@@ -726,7 +878,8 @@ class SchedulerScreenSaver {
                             if ($unused.Count -eq 0) {
                                 $speechText = "Story time! No stories available."
                                 $displayText = "Story time! No stories available."
-                            } else {
+                            }
+                            else {
                                 $selectedIndex = Get-Random -InputObject $unused
                                 $story = $this.Stories[$selectedIndex]
                                 $this.RecordUsedIndex($selectedIndex, $this.StoryTrackerFile)
@@ -741,7 +894,8 @@ class SchedulerScreenSaver {
                             if ($unused.Count -eq 0) {
                                 $speechText = "Time for wisdom! No quotes available."
                                 $displayText = "Time for wisdom! No quotes available."
-                            } else {
+                            }
+                            else {
                                 $selectedIndex = Get-Random -InputObject $unused
                                 $quote = $this.Quotes[$selectedIndex]
                                 $this.RecordUsedIndex($selectedIndex, $this.QuoteTrackerFile)
@@ -756,7 +910,8 @@ class SchedulerScreenSaver {
                             if ($unused.Count -eq 0) {
                                 $speechText = "Time for a joke! No jokes available."
                                 $displayText = "Time for a joke! No jokes available."
-                            } else {
+                            }
+                            else {
                                 $selectedIndex = Get-Random -InputObject $unused
                                 $joke = $this.Jokes[$selectedIndex]
                                 $this.RecordUsedJokeIndex($selectedIndex)
@@ -768,10 +923,7 @@ class SchedulerScreenSaver {
                         }
                         else {
                             # Normalize names (trim whitespace) and build rotation key consistently
-                            $names = @()
-                            if (-not [string]::IsNullOrWhiteSpace($task.Name)) {
-                                $names = ($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-                            }
+                            $names = @((($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
                             if ($names.Count -eq 0) {
                                 # No assigned person; treat as system task
                                 $person = "Unassigned"
@@ -780,7 +932,9 @@ class SchedulerScreenSaver {
                                 $person = $names[0]
                             }
 
-                            $timePart = $task.Time.ToString().Trim()
+                            # Use RotationAnchor for injected tasks when present so rotation
+                            # alternation works independent of the displayed due time.
+                            $timePart = if ($task.PSObject.Properties.Name -contains 'RotationAnchor') { $task.RotationAnchor.ToString().Trim() } else { $task.Time.ToString().Trim() }
                             $daysPart = $task.DaysOfWeek.ToString().Trim()
                             $actionPart = $task.Action.ToString().Trim()
                             $rotationKey = "$timePart|$daysPart|$actionPart"
@@ -810,6 +964,12 @@ class SchedulerScreenSaver {
                                 $this.TaskState[$rotationKey] = $person.ToString().Trim()
                                 $this.SaveTaskState()
                             }
+                            else {
+                                # Single person assigned
+                                $this.TaskState[$rotationKey] = $person.ToString().Trim()
+                                $this.SaveTaskState()
+                            }
+
                             $alertMessage = "$person, $($task.Action)!"
                             $speechText = "It is $($now.ToString("h:mm tt")). $alertMessage"
                             $personForLog = $person
@@ -838,6 +998,17 @@ class SchedulerScreenSaver {
                         try {
                             [Audio]::SetVolume($this.SpeechVolume)
                             $this.SpeechSynth.Speak($speechText)
+                            
+
+                            # Start a one-off UI timer that waits 60 seconds and then writes "hello" to the screen
+                            try {
+                                $helloTimer.Interval = 60000  # 60 seconds
+                                $helloTimer.Tag = $this
+                                $helloTimer.Start()
+                            }
+                            catch {
+                                Write-Host "Failed to start hello timer: $($_.Exception.Message)"
+                            }
                         }
                         catch {
                             Write-Host "Error during speech/volume control: $($_.Exception.Message)"
@@ -853,7 +1024,7 @@ class SchedulerScreenSaver {
                     #Write-Host "Action: '$($task.Action)"
                     #Write-Host "Person: '$($task.Name)': "
                     Write-Host "$($_.Exception.Message)"
-                     Write-Host "$($_.Exception.StackTrace)"
+                    Write-Host "$($_.Exception.StackTrace)"
                     continue
                 }
             }
@@ -969,8 +1140,19 @@ class SchedulerScreenSaver {
             $currentDay = $now.DayOfWeek.ToString()
             $allPersons = @()
             foreach ($task in $this.Schedule) {
-                $names = ($task.Name -split ':') | ForEach-Object { $_.Trim() }
+                $names = @((($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
                 $allPersons += $names
+            }
+            # Include any names from injected/today's tasks so they appear in panels
+            foreach ($tinfo in $this.TodaysTasks.Values) {
+                try {
+                    $t = $tinfo.Task
+                    if ($null -ne $t -and -not [string]::IsNullOrWhiteSpace($t.Name)) {
+                        $names = @((($t.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
+                        $allPersons += $names
+                    }
+                }
+                catch { continue }
             }
             $uniquePersons = $allPersons | Sort-Object -Unique
             # Clear existing panels
@@ -995,6 +1177,8 @@ class SchedulerScreenSaver {
             foreach ($person in $uniquePersons) {
                 try {
                     $personTasks = @()
+                    # Track which display keys we've already added to avoid duplicates
+                    $addedKeys = @{}
                     foreach ($task in $this.Schedule) {
                         try {
                             $names = ($task.Name -split ':') | ForEach-Object { $_.Trim() }
@@ -1020,25 +1204,86 @@ class SchedulerScreenSaver {
                                     }
                                 }
                                 if ($assigned -eq $person) {
-                                    $personTasks += [PSCustomObject]@{
-                                        Time       = $task.Time
-                                        Action     = $task.Action
-                                        short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
+                                    $displayKey = "$($task.Time)|$person|$($task.Action)"
+                                    if (-not $addedKeys.ContainsKey($displayKey)) {
+                                        $personTasks += [PSCustomObject]@{
+                                            Time        = $task.Time
+                                            Action      = $task.Action
+                                            short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
+                                        }
+                                        $addedKeys[$displayKey] = $true
                                     }
                                 }
                             }
                             else {
                                 if ($names -contains $person) {
-                                    $personTasks += [PSCustomObject]@{
-                                        Time       = $task.Time
-                                        Action     = $task.Action
-                                        short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
+                                    $displayKey = "$($task.Time)|$person|$($task.Action)"
+                                    if (-not $addedKeys.ContainsKey($displayKey)) {
+                                        $personTasks += [PSCustomObject]@{
+                                            Time        = $task.Time
+                                            Action      = $task.Action
+                                            short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
+                                        }
+                                        $addedKeys[$displayKey] = $true
                                     }
                                 }
                             }
                         }
                         catch {
                             Write-Host "ERROR processing task for person '$person' - Action: '$($task.Action)': $($_.Exception.Message)"
+                            continue
+                        }
+                    }
+                    # Also account for injected or today's tasks present in TodaysTasks
+                    foreach ($tinfo in $this.TodaysTasks.Values) {
+                        try {
+                            $t = $tinfo.Task
+                            if (-not $this.IsDayInRange($currentDay, $t.DaysOfWeek)) { continue }
+                            $names = @((($t.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
+                            # Determine rotation time anchor (injected tasks may set RotationAnchor)
+                            $timeForRotation = if ($t.PSObject.Properties.Name -contains 'RotationAnchor') { $t.RotationAnchor } else { $t.Time }
+                            if ($names.Count -gt 1) {
+                                $rotationKey = "$($timeForRotation)|$($t.DaysOfWeek)|$($t.Action)"
+                                $assigned = $names[0]
+                                if ($this.TaskState.ContainsKey($rotationKey)) {
+                                    $lastPerson = $this.TaskState[$rotationKey]
+                                    if ($null -ne $lastPerson) { $lastPerson = $lastPerson.ToString().Trim() }
+                                    $currentIndex = -1
+                                    for ($i = 0; $i -lt $names.Count; $i++) {
+                                        if ($names[$i].Equals($lastPerson, [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                                            $currentIndex = $i; break
+                                        }
+                                    }
+                                    if ($currentIndex -eq -1 -or $currentIndex -ge ($names.Count - 1)) { $assigned = $names[0] }
+                                    else { $assigned = $names[$currentIndex + 1] }
+                                }
+                                if ($assigned -eq $person) {
+                                    $displayKey = "$($t.Time)|$person|$($t.Action)"
+                                    if (-not $addedKeys.ContainsKey($displayKey)) {
+                                        $personTasks += [PSCustomObject]@{
+                                            Time        = $t.Time
+                                            Action      = $t.Action
+                                            short_title = if ($t.PSObject.Properties.Name -contains 'short_title') { $t.short_title } else { $null }
+                                        }
+                                        $addedKeys[$displayKey] = $true
+                                    }
+                                }
+                            }
+                            else {
+                                if ($names -contains $person) {
+                                    $displayKey = "$($t.Time)|$person|$($t.Action)"
+                                    if (-not $addedKeys.ContainsKey($displayKey)) {
+                                        $personTasks += [PSCustomObject]@{
+                                            Time        = $t.Time
+                                            Action      = $t.Action
+                                            short_title = if ($t.PSObject.Properties.Name -contains 'short_title') { $t.short_title } else { $null }
+                                        }
+                                        $addedKeys[$displayKey] = $true
+                                    }
+                                }
+                            }
+                        }
+                        catch {
                             continue
                         }
                     }
@@ -1067,7 +1312,8 @@ class SchedulerScreenSaver {
                     $nameLabel = [Label]::new()
                     if ($person -eq "") {
                         $nameLabel.Text = "Unassigned Tasks:"
-                    } else {
+                    }
+                    else {
                         $nameLabel.Text = "$person's Tasks:"
                     }
                     $nameLabel.Font = [Font]::new("Arial", 16, [FontStyle]::Bold)
@@ -1083,7 +1329,8 @@ class SchedulerScreenSaver {
                             $displayTime = $taskTime.ToString("h:mm tt")
                             $displayText = if (![string]::IsNullOrWhiteSpace($task.short_title)) {
                                 $task.short_title
-                            } else {
+                            }
+                            else {
                                 $truncated = $task.Action.Substring(0, [Math]::Min(18, $task.Action.Length))
                                 if ($task.Action.Length -gt 18) { "$truncated..." } else { $truncated }
                             }
