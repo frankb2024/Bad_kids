@@ -66,6 +66,9 @@ class SchedulerScreenSaver {
     [DateTime]$LastScheduleLoad  # Track when we last loaded the schedule
     [string]$ScheduleFile = "schedule.csv"
     [string]$StateFile = "task_state.csv"
+    [string]$StateFile2 = "task_state2.csv"
+    [DateTime]$ScheduleFileLastWrite
+    [hashtable]$TaskState2
     [string]$LogFile = "TaskLog.csv"
     [string]$StoriesFile = "stories.csv"
     [string]$QuotesFile = "Daily Wisdom for Future Success.csv"
@@ -90,6 +93,7 @@ class SchedulerScreenSaver {
         try {
             Write-Host "Creating form (Debug Mode: $debug)"
             $this.DebugMode = $debug
+
             # Ensure volume starts at 0
             try {
                 [Audio]::SetVolume(0.0)
@@ -146,6 +150,10 @@ class SchedulerScreenSaver {
                         elseif ($e.KeyCode -eq [Keys]::I) {
                             # Inject a test scheduled task 30 seconds from now (frank:john)
                             $s.tag.InjectScheduledTaskIn30Seconds()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::D) {
+                            # Dump upcoming assignments for rotating tasks
+                            $s.tag.DumpUpcomingAssignments(10)
                         }
                         elseif ($e.KeyCode -eq [Keys]::T) {
                             # Inject a single-person task for Frank in 30 seconds
@@ -369,6 +377,21 @@ class SchedulerScreenSaver {
     [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
         try {
             $now = [DateTime]::Now
+            # Runtime schedule change detection: if schedule.csv write time changed, rebuild task_state2 and reload today's tasks
+            try {
+                $currentWrite = $null
+                if (Test-Path $this.ScheduleFile) { $currentWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc }
+                if ($currentWrite -and ($this.ScheduleFileLastWrite -eq $null -or $currentWrite -ne $this.ScheduleFileLastWrite)) {
+                    Write-Host "Detected change in $($this.ScheduleFile) (LastWriteTimeUtc changed). Rebuilding rotation map."
+                    $this.ScheduleFileLastWrite = $currentWrite
+                    try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed during runtime detection: $($_.Exception.Message)" }
+                    try { $this.LoadTodaysTasks() } catch { Write-Host "LoadTodaysTasks failed after schedule change: $($_.Exception.Message)" }
+                }
+            }
+            catch {
+                # Non-fatal; log and continue
+                Write-Host "Schedule change detection error: $($_.Exception.Message)"
+            }
             # Update clock visual
             try { $this.UpdateClock($now) } catch { Write-Host "Clock update failed: $($_.Exception.Message)" }
             # Update simple art display (circle)
@@ -645,9 +668,13 @@ class SchedulerScreenSaver {
             Write-Host "Loading schedule from $($this.ScheduleFile)"
             if (Test-Path $this.ScheduleFile) {
                 $this.Schedule = Import-Csv -Path $this.ScheduleFile
+                # Cache schedule file last write time for change detection
+                try { $this.ScheduleFileLastWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc } catch { $this.ScheduleFileLastWrite = [DateTime]::Now.ToUniversalTime() }
                 $this.LastScheduleLoad = [DateTime]::Now
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
+                # Ensure the rotation map is present and up-to-date
+                try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed: $($_.Exception.Message)" }
                 $this.LoadTodaysTasks()
             }
             else {
@@ -661,6 +688,7 @@ class SchedulerScreenSaver {
                 $sample | Export-Csv -Path $this.ScheduleFile -NoTypeInformation
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
+                try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed (sample): $($_.Exception.Message)" }
                 $this.LoadTodaysTasks()
             }
         }
@@ -889,6 +917,7 @@ class SchedulerScreenSaver {
             $now = [DateTime]::Now
             $currentDay = $now.DayOfWeek.ToString()
             $this.TodaysTasks = @{}
+            
             foreach ($task in $this.Schedule) {
                 try {
                     if ($this.IsDayInRange($currentDay, $task.DaysOfWeek)) {
@@ -896,12 +925,22 @@ class SchedulerScreenSaver {
                         $taskDateTime = [DateTime]::new($now.Year, $now.Month, $now.Day, 
                             $taskTime.Hour, $taskTime.Minute, 0)
                         $taskKey = "$($task.Time)|$($task.Name)|$($task.Action)"
+                        # Compute assigned person from compact task_state2 if present
+                        $assigned = $null
+                        try {
+                            if ($this.TaskState2 -and $this.TaskState2.Count -gt 0) {
+                                $rotationKey = "$($task.Time.ToString().Trim())|$($task.DaysOfWeek.ToString().Trim())|$($task.Action.ToString().Trim())"
+                                $assigned = $this.GetAssignedPersonForDate($rotationKey, $taskDateTime)
+                            }
+                        }
+                        catch { $assigned = $null }
+
                         $this.TodaysTasks[$taskKey] = @{
                             Task           = $task
                             DateTime       = $taskDateTime
                             Completed      = $false
                             Called         = $false
-                            AssignedPerson = $null
+                            AssignedPerson = $assigned
                         }
                     }
                 }
@@ -1075,6 +1114,196 @@ class SchedulerScreenSaver {
         }
     }
 
+    [void]EnsureTaskState2() {
+        try {
+            # If schedule file changed since last cached time, or task_state2 missing, rebuild
+            $needRebuild = $false
+            try {
+                $currentWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc
+            }
+            catch {
+                $currentWrite = $null
+            }
+            if (-not (Test-Path $this.StateFile2)) { $needRebuild = $true }
+            if ($currentWrite -and $this.ScheduleFileLastWrite -and ($currentWrite -ne $this.ScheduleFileLastWrite)) { $needRebuild = $true }
+            if ($needRebuild) {
+                Write-Host "Rebuilding $($this.StateFile2) due to schedule change or missing file"
+                $this.BuildTaskState2()
+                try { $this.ScheduleFileLastWrite = $currentWrite } catch { }
+            }
+            else {
+                # Load existing state2 into memory as grouped rotation definitions
+                try {
+                    $this.TaskState2 = @{}
+                    $rows = Import-Csv -Path $this.StateFile2
+                    $grouped = $rows | Group-Object -Property TaskKey
+                    foreach ($g in $grouped) {
+                        $taskKey = $g.Name
+                        # Rows contain AnchorDate, Position, Name
+                        $anchor = $g.Group | Select-Object -First 1 | Select-Object -ExpandProperty AnchorDate
+                        $ordered = $g.Group | Sort-Object -Property @{Expression={[int]$_.Position}} | ForEach-Object { $_.Name }
+                        $this.TaskState2[$taskKey] = @{ AnchorDate = $anchor; Names = $ordered }
+                    }
+                    Write-Host "Loaded task_state2 with $($this.TaskState2.Count) rotation definitions"
+                }
+                catch {
+                    Write-Host "Failed loading existing $($this.StateFile2): $($_.Exception.Message). Rebuilding."
+                    $this.BuildTaskState2()
+                }
+            }
+        }
+        catch {
+            Write-Host "ERROR in EnsureTaskState2: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+        }
+    }
+
+    [void]BuildTaskState2() {
+        try {
+            Write-Host "Building compact rotation map into $($this.StateFile2)"
+            $rows = @()
+            $this.TaskState2 = @{}
+            $anchorDate = [DateTime]::Today.ToString('yyyy-MM-dd')
+            foreach ($sched in $this.Schedule) {
+                try {
+                    $namesRaw = $sched.Name.ToString()
+                    if ([string]::IsNullOrWhiteSpace($namesRaw)) { continue }
+                    if ($namesRaw -notmatch ':') { continue }
+                    $names = @($namesRaw -split ':' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    if ($names.Count -eq 0) { continue }
+
+                    $rotationKey = "$($sched.Time.ToString().Trim())|$($sched.DaysOfWeek.ToString().Trim())|$($sched.Action.ToString().Trim())"
+                    # For compact representation write one line per name with a Position (+1..N)
+                    for ($i = 0; $i -lt $names.Count; $i++) {
+                        $pos = $i + 1
+                        $row = [PSCustomObject]@{
+                            TaskKey = $rotationKey
+                            AnchorDate = $anchorDate
+                            Position = $pos
+                            Name = $names[$i]
+                        }
+                        $rows += $row
+                    }
+                    # keep in-memory structure
+                    $this.TaskState2[$rotationKey] = @{ AnchorDate = $anchorDate; Names = $names }
+                }
+                catch {
+                    continue
+                }
+            }
+            # Write CSV atomically
+            $temp = "$($this.StateFile2).tmp"
+            if ($rows.Count -gt 0) {
+                $rows | Export-Csv -Path $temp -NoTypeInformation -Force
+                try { Move-Item -Path $temp -Destination $this.StateFile2 -Force } catch { Write-Host "Warning: move failed for $($this.StateFile2): $($_.Exception.Message); writing directly"; $rows | Export-Csv -Path $this.StateFile2 -NoTypeInformation -Force }
+            }
+            else {
+                if (Test-Path $this.StateFile2) { Remove-Item $this.StateFile2 -ErrorAction SilentlyContinue }
+            }
+
+            # Debug: write compact rotation definitions
+            Write-Host "Built rotation definitions (anchor date = $anchorDate):"
+            foreach ($k in $this.TaskState2.Keys) {
+                $def = $this.TaskState2[$k]
+                Write-Host "$k => Anchor=$($def.AnchorDate) Names=($([string]::Join(',', $def.Names)))"
+            }
+            Write-Host "Finished building $($this.StateFile2) with $($this.TaskState2.Count) rotation entries"
+        }
+        catch {
+            Write-Host "ERROR in BuildTaskState2: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+        }
+    }
+
+    [string]GetAssignedPersonForDate([string]$rotationKey, [DateTime]$targetDate) {
+        try {
+            if (-not $this.TaskState2.ContainsKey($rotationKey)) { return $null }
+            $def = $this.TaskState2[$rotationKey]
+            $anchor = [DateTime]::ParseExact($def.AnchorDate, 'yyyy-MM-dd', $null)
+            $names = $def.Names
+            if (-not $names -or $names.Count -eq 0) { return $null }
+
+            # Extract DaysOfWeek part from rotationKey (Time|DaysOfWeek|Action)
+            $parts = $rotationKey -split '\|'
+            $daysPart = if ($parts.Count -ge 2) { $parts[1] } else { 'Sunday-Saturday' }
+
+            # Count schedule occurrences between anchor and target (respecting DaysOfWeek)
+            $occurrences = 0
+            if ($targetDate -eq $anchor) {
+                $occurrences = 0
+            }
+            elseif ($targetDate -gt $anchor) {
+                $d = $anchor.AddDays(1)
+                while ($d -le $targetDate) {
+                    if ($this.IsDayInRange($d.DayOfWeek.ToString(), $daysPart)) { $occurrences++ }
+                    $d = $d.AddDays(1)
+                }
+            }
+            else {
+                # targetDate < anchor: count negative occurrences backward
+                $d = $targetDate.AddDays(1)
+                $back = 0
+                while ($d -le $anchor) {
+                    if ($this.IsDayInRange($d.DayOfWeek.ToString(), $daysPart)) { $back++ }
+                    $d = $d.AddDays(1)
+                }
+                $occurrences = -$back
+            }
+
+            # anchor position is names[0] (Position 1)
+            $n = $names.Count
+            $anchorIndex = 0
+            $idx = ($anchorIndex + $occurrences) % $n
+            if ($idx -lt 0) { $idx = (($idx % $n) + $n) % $n }
+            return $names[$idx]
+        }
+        catch {
+            Write-Host "ERROR in GetAssignedPersonForDate for $rotationKey on $($targetDate.ToString('yyyy-MM-dd')): $($_.Exception.Message)"
+            return $null
+        }
+    }
+
+    [void]DumpUpcomingAssignments([int]$days = 10) {
+        try {
+            Write-Host "Dumping upcoming assignments for next $days days"
+            # Ensure TaskState2 loaded
+            try { if (-not $this.TaskState2 -or $this.TaskState2.Count -eq 0) { $this.EnsureTaskState2() } } catch { Write-Host "Warning: EnsureTaskState2 failed: $($_.Exception.Message)" }
+
+            $today = [DateTime]::Today
+            foreach ($sched in $this.Schedule) {
+                try {
+                    $namesRaw = $sched.Name.ToString()
+                    if ([string]::IsNullOrWhiteSpace($namesRaw)) { continue }
+                    if ($namesRaw -notmatch ':') { continue }
+
+                    $rotationKey = "$($sched.Time.ToString().Trim())|$($sched.DaysOfWeek.ToString().Trim())|$($sched.Action.ToString().Trim())"
+                    Write-Host "--- Rotation: $rotationKey ---"
+
+                    for ($d = 0; $d -lt $days; $d++) {
+                        $date = $today.AddDays($d)
+                        # Only show dates where the schedule runs
+                        if (-not $this.IsDayInRange($date.DayOfWeek.ToString(), $sched.DaysOfWeek.ToString())) { continue }
+                        # build a DateTime at the scheduled time for accurate mapping
+                        try {
+                            $taskTime = [DateTime]::ParseExact($sched.Time, 'HH:mm', $null)
+                            $taskDateTime = [DateTime]::new($date.Year, $date.Month, $date.Day, $taskTime.Hour, $taskTime.Minute, 0)
+                        }
+                        catch {
+                            $taskDateTime = $date
+                        }
+                        $person = $this.GetAssignedPersonForDate($rotationKey, $taskDateTime)
+                        Write-Host "$($date.ToString('yyyy-MM-dd')) $($date.DayOfWeek) $($sched.Time) - $($sched.Action) => $person"
+                    }
+                }
+                catch {
+                    Write-Host "Error dumping rotation for $($sched.Action): $($_.Exception.Message)"
+                }
+            }
+            Write-Host "Finished dump"
+        }
+        catch {
+            Write-Host "ERROR in DumpUpcomingAssignments: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+        }
+    }
+
     [void]CheckScheduledTasks() {
         $helloTimer = [System.Windows.Forms.Timer]::new()
                                 $helloTimer.Add_Tick({ param($s, $ev)
@@ -1088,7 +1317,7 @@ class SchedulerScreenSaver {
                                     })
                                     
         try {
-            if ($this.DebugMode) { Write-Host "Checking scheduled tasks" }
+            
             $now = [DateTime]::Now
             if (-not $this.TodaysTasks) {
                 Write-Host "TodaysTasks not loaded - loading now"
@@ -1126,8 +1355,8 @@ class SchedulerScreenSaver {
                                 $selectedIndex = Get-Random -InputObject $unused
                                 $story = $this.Stories[$selectedIndex]
                                 $this.RecordUsedIndex($selectedIndex, $this.StoryTrackerFile)
-                                $speechText = "Story time! $($story.Title). $($story.Story) Moral: $($story.Moral)"
-                                $displayText = "📖 STORY TIME 📖`n`nTitle: $($story.Title)`n`n$($story.Story)`n`nMoral: $($story.Moral)"
+                                $speechText = "Story time! $($story.Title). $($story.Story)"
+                                $displayText = "📖 STORY TIME 📖`n`nTitle: $($story.Title)`n`n$($story.Story)"
                             }
                             $alertMessage = $displayText
                             $personForLog = "System"
@@ -1333,7 +1562,7 @@ class SchedulerScreenSaver {
 
     [void]UpdateNextTaskDisplay() {
         try {
-            if ($this.DebugMode) { Write-Host "Updating next/previous task display" }
+            
             $now = [DateTime]::Now
 
             # Build a list of today's tasks (including injected/todays entries) with DateTime and resolved person
@@ -1407,7 +1636,7 @@ class SchedulerScreenSaver {
 
     [void]UpdatePersonTaskDisplays() {
         try {
-            if ($this.DebugMode) { Write-Host "Updating person task displays" }
+            #if ($this.DebugMode) { Write-Host "Updating person task displays" }
             $now = [DateTime]::Now
             $currentDay = $now.DayOfWeek.ToString()
             $allPersons = @()
