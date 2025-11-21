@@ -2,6 +2,7 @@
 This powershell program helps parents manage their children's daily routines by providing automated, spoken, fair, and trustworthy scheduling of tasks and chores.
 
 Why Powershell? Runs on every Windows computer.  You can read the source code and ensure nothing nefarious.
+Why written as a powershell class?  It helps to unload all the code from memory by unloading the class on exit.
 
 ![alt text](https://github.com/frankb2024/Bad_kids/blob/main/bad_kids.png)
 
