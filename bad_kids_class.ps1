@@ -1,3 +1,5 @@
+
+
 using namespace System.Windows.Forms
 using namespace System.Drawing
 using namespace System.Speech.Synthesis
@@ -96,7 +98,7 @@ class SchedulerScreenSaver {
         try {
             Write-Host "Creating form (Debug Mode: $debug)"
             $this.DebugMode = $debug
-
+            $this.DebugMode = $true
             # Ensure volume starts at 0
             try {
                 [Audio]::SetVolume(0.0)
@@ -279,8 +281,8 @@ class SchedulerScreenSaver {
             $this.AlertTextBox.Multiline = $true
             $this.AlertTextBox.ScrollBars = [ScrollBars]::Vertical
             $this.AlertTextBox.Visible = $false
-            $this.AlertTextBox.Location = [Point]::new(100, 300)
-            $this.AlertTextBox.Size = [Size]::new(800, 400)
+            $this.AlertTextBox.Location = [Point]::new(50, 50)
+            $this.AlertTextBox.Size = [Size]::new(1200, 800)
             $this.AlertTextBox.WordWrap = $true
             # Add static controls
             $this.MainPanel.Controls.Add($this.DateLabel)
@@ -296,26 +298,28 @@ class SchedulerScreenSaver {
                 $clockSize = 160
                 $this.ClockBox = [System.Windows.Forms.PictureBox]::new()
                 $this.ClockBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
-                # place near top-right; anchor so it moves with the panel
-                $this.ClockBox.Location = [System.Drawing.Point]::new([Math]::Max(0, $this.MainPanel.MinimumSize.Width - $clockSize - 10), 10)
+                # place at form upper-right so it remains visible during alerts
+                $clockX = [Math]::Max(0, $this.Form.ClientSize.Width - $clockSize - 10)
+                $this.ClockBox.Location = [System.Drawing.Point]::new($clockX, 10)
                 $this.ClockBox.SizeMode = [PictureBoxSizeMode]::Normal
                 $this.ClockBox.BackColor = [Color]::Black
                 $this.ClockBox.BorderStyle = [BorderStyle]::None
                 $this.ClockBox.Anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right
-                $this.MainPanel.Controls.Add($this.ClockBox)
+                $this.Form.Controls.Add($this.ClockBox)
                 # Initial draw for clock
                 $this.UpdateClock([DateTime]::Now)
 
-                # Add an art PictureBox in the bottom-right of MainPanel (same size as clock)
+                # Add an art PictureBox in the lower-left of the Form (same size as clock)
                 try {
                     $this.ArtBox = [System.Windows.Forms.PictureBox]::new()
                     $this.ArtBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
-                    $this.ArtBox.Location = [System.Drawing.Point]::new([Math]::Max(0, $this.MainPanel.MinimumSize.Width - $clockSize - 10), [Math]::Max(0, $this.MainPanel.MinimumSize.Height - $clockSize - 10))
+                    $artY = [Math]::Max(0, $this.Form.ClientSize.Height - $clockSize - 10)
+                    $this.ArtBox.Location = [System.Drawing.Point]::new(10, $artY)
                     $this.ArtBox.SizeMode = [PictureBoxSizeMode]::Normal
                     $this.ArtBox.BackColor = [Color]::Black
                     $this.ArtBox.BorderStyle = [BorderStyle]::None
-                    $this.ArtBox.Anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Right
-                    $this.MainPanel.Controls.Add($this.ArtBox)
+                    $this.ArtBox.Anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Left
+                    $this.Form.Controls.Add($this.ArtBox)
                     # Initial simple draw
                     $this.UpdateArt([DateTime]::Now)
                 }
@@ -384,6 +388,8 @@ class SchedulerScreenSaver {
         }
     }
 
+
+                    
     # OnTimerTick
     # Main periodic update handler invoked by the UI Timer. Performs:
     #  - Clock and art updates
@@ -394,6 +400,19 @@ class SchedulerScreenSaver {
     # Parameter:
     #  - $inthis: self reference passed from the timer tag
     [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
+
+        $inthis.Timer.Stop()
+
+        function Get-Pos([string]$pos, [int]$ctrlW, [int]$ctrlH, [int]$fw, [int]$fh) {
+            switch ($pos) {
+                'UpperRight' { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = 10; $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right }
+                'LowerRight' { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = [Math]::Max(0, $fh - $ctrlH - 10); $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Right }
+                'LowerLeft' { $x = 10; $y = [Math]::Max(0, $fh - $ctrlH - 10); $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Left }
+                default { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = 10; $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right }
+            }
+            return @{ X = $x; Y = $y; Anchor = $anchor }
+        }
+    
         try {
             $now = [DateTime]::Now
             # Runtime schedule change detection: if schedule.csv write time changed, rebuild task_state2 and reload today's tasks
@@ -411,10 +430,50 @@ class SchedulerScreenSaver {
                 # Non-fatal; log and continue
                 Write-Host "Schedule change detection error: $($_.Exception.Message)"
             }
+
+            # Update clock visual
+            # Randomize and place Clock and Art controls so they don't overlap.
+            try {
+                $positions = @('UpperRight', 'LowerRight', 'LowerLeft')
+                if ($this.ClockBox -and $this.ArtBox) {
+                    # Choose distinct positions for clock and art
+                    $clockPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)]
+                    $artPos = $clockPos  # <-- Fix: initialize to avoid "not assigned" warning
+                    do { 
+                        $artPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)] 
+                    } while ($artPos -eq $clockPos)
+
+                    $formW = 0; $formH = 0
+                    try { 
+                        $formW = $this.Form.ClientSize.Width
+                        $formH = $this.Form.ClientSize.Height
+                    }
+                    catch { }
+
+                    # Helper to compute location and anchor
+                    try {
+                        $cpos = Get-Pos $clockPos $this.ClockBox.Width $this.ClockBox.Height $formW $formH
+                        $this.ClockBox.Anchor = $cpos.Anchor
+                        $this.ClockBox.Location = [System.Drawing.Point]::new($cpos.X, $cpos.Y)
+                    }
+                    catch { }
+
+                    try {
+                        $apos = Get-Pos $artPos $this.ArtBox.Width $this.ArtBox.Height $formW $formH
+                        $this.ArtBox.Anchor = $apos.Anchor
+                        $this.ArtBox.Location = [System.Drawing.Point]::new($apos.X, $apos.Y)
+                    }
+                    catch { }
+                }
+            }
+            catch {
+                Write-Host "Positioning clock/art failed: $($_.Exception.Message)"
+            }
             # Update clock visual
             try { $this.UpdateClock($now) } catch { Write-Host "Clock update failed: $($_.Exception.Message)" }
             # Update simple art display (circle)
             try { $this.UpdateArt($now) } catch { Write-Host "Art update failed: $($_.Exception.Message)" }
+            
             # Check if we need to reload schedule (at midnight or if not loaded today)
             if ($this.LastScheduleLoad.Date -ne $now.Date) {
                 Write-Host "New day detected - reloading schedule"
@@ -426,19 +485,23 @@ class SchedulerScreenSaver {
             # Update time display
             $this.DateLabel.Text = $now.ToString("dddd, MMMM dd, yyyy")
             $this.TimeLabel.Text = $now.ToString("h:mm:ss tt")  # 'h' for 12-hour with AM/PM
+            
             # Handle alert timeout
             if ($this.IsShowingAlert -and $now -ge $this.AlertEndTime) {
                 $this.AlertTextBox.Visible = $false
                 $this.IsShowingAlert = $false
                 $this.MainPanel.Visible = $true
+                
                 # Show person panels again
                 # Restore visibility for each person panel hidden during alerts
                 foreach ($panel in $this.PersonTaskPanels.Values) {
                     $panel.Visible = $true
                 }
             }
+            
             # Check for scheduled tasks
             $this.CheckScheduledTasks()
+
             # Update person task displays
             $this.UpdatePersonTaskDisplays()
             # Move main panel randomly every 10 seconds
@@ -448,6 +511,7 @@ class SchedulerScreenSaver {
             Write-Host "ERROR in OnTimerTick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
             # Do not rethrow — keep timer running
         }
+        $inthis.Timer.Start()
     }
 
     # MoveMainPanel
@@ -511,10 +575,10 @@ class SchedulerScreenSaver {
             # Loop over 12 hour positions to draw the hour marker lines around the clock face
             for ($i = 0; $i -lt 12; $i++) {
                 $angle = ($i / 12.0) * 2.0 * [Math]::PI
-                $outerX = [int]($cx + $radius * [Math]::Cos($angle - [Math]::PI/2))
-                $outerY = [int]($cy + $radius * [Math]::Sin($angle - [Math]::PI/2))
-                $innerX = [int]($cx + ($radius - 14) * [Math]::Cos($angle - [Math]::PI/2))
-                $innerY = [int]($cy + ($radius - 14) * [Math]::Sin($angle - [Math]::PI/2))
+                $outerX = [int]($cx + $radius * [Math]::Cos($angle - [Math]::PI / 2))
+                $outerY = [int]($cy + $radius * [Math]::Sin($angle - [Math]::PI / 2))
+                $innerX = [int]($cx + ($radius - 14) * [Math]::Cos($angle - [Math]::PI / 2))
+                $innerY = [int]($cy + ($radius - 14) * [Math]::Sin($angle - [Math]::PI / 2))
                 $g.DrawLine($penFace, $outerX, $outerY, $innerX, $innerY)
             }
 
@@ -523,10 +587,10 @@ class SchedulerScreenSaver {
             # Loop over positions between hours to draw smaller half-hour markers
             for ($i = 0; $i -lt 12; $i++) {
                 $angle = (($i + 0.5) / 12.0) * 2.0 * [Math]::PI
-                $outerX = [int]($cx + ($radius - 4) * [Math]::Cos($angle - [Math]::PI/2))
-                $outerY = [int]($cy + ($radius - 4) * [Math]::Sin($angle - [Math]::PI/2))
-                $innerX = [int]($cx + ($radius - 10) * [Math]::Cos($angle - [Math]::PI/2))
-                $innerY = [int]($cy + ($radius - 10) * [Math]::Sin($angle - [Math]::PI/2))
+                $outerX = [int]($cx + ($radius - 4) * [Math]::Cos($angle - [Math]::PI / 2))
+                $outerY = [int]($cy + ($radius - 4) * [Math]::Sin($angle - [Math]::PI / 2))
+                $innerX = [int]($cx + ($radius - 10) * [Math]::Cos($angle - [Math]::PI / 2))
+                $innerY = [int]($cy + ($radius - 10) * [Math]::Sin($angle - [Math]::PI / 2))
                 $g.DrawLine($penHalf, $outerX, $outerY, $innerX, $innerY)
             }
 
@@ -539,8 +603,8 @@ class SchedulerScreenSaver {
             # Loop from 1 to 12 to place numeric labels around the clock face
             for ($i = 1; $i -le 12; $i++) {
                 $angle = ($i / 12.0) * 2.0 * [Math]::PI
-                $tx = $cx + [int](($radius - 28) * [Math]::Cos($angle - [Math]::PI/2))
-                $ty = $cy + [int](($radius - 28) * [Math]::Sin($angle - [Math]::PI/2))
+                $tx = $cx + [int](($radius - 28) * [Math]::Cos($angle - [Math]::PI / 2))
+                $ty = $cy + [int](($radius - 28) * [Math]::Sin($angle - [Math]::PI / 2))
                 $g.DrawString($i.ToString(), $fontNum, [System.Drawing.Brushes]::White, $tx, $ty, $stringFormat)
             }
 
@@ -550,9 +614,9 @@ class SchedulerScreenSaver {
             $hour = ($time.Hour % 12) + ($min / 60.0)
 
             # Angles (radians), adjust so 12 o'clock is -PI/2
-            $secAngle = ($sec / 60.0) * 2.0 * [Math]::PI - [Math]::PI/2
-            $minAngle = ($min / 60.0) * 2.0 * [Math]::PI - [Math]::PI/2
-            $hourAngle = ($hour / 12.0) * 2.0 * [Math]::PI - [Math]::PI/2
+            $secAngle = ($sec / 60.0) * 2.0 * [Math]::PI - [Math]::PI / 2
+            $minAngle = ($min / 60.0) * 2.0 * [Math]::PI - [Math]::PI / 2
+            $hourAngle = ($hour / 12.0) * 2.0 * [Math]::PI - [Math]::PI / 2
 
             # Draw hour hand
             $hourLen = [int]($radius * 0.5)
@@ -627,11 +691,11 @@ class SchedulerScreenSaver {
 
             # palette
             $palette = @(
-                [Color]::FromArgb(220, 40,120,200),
-                [Color]::FromArgb(200, 200,50,120),
-                [Color]::FromArgb(200, 60,200,90),
-                [Color]::FromArgb(200, 250,200,30),
-                [Color]::FromArgb(200, 255,128,0)
+                [Color]::FromArgb(220, 40, 120, 200),
+                [Color]::FromArgb(200, 200, 50, 120),
+                [Color]::FromArgb(200, 60, 200, 90),
+                [Color]::FromArgb(200, 250, 200, 30),
+                [Color]::FromArgb(200, 255, 128, 0)
             )
 
             $sectors = 6 + ($rand.Next() % 7) # 6..12 sectors
@@ -640,11 +704,11 @@ class SchedulerScreenSaver {
             # Loop through each base shape to place randomized artwork elements
             for ($i = 0; $i -lt $shapes; $i++) {
                 $angleOffset = $rand.NextDouble() * 360.0
-                $shapeRadius = $rand.Next([int]($radius*0.05), [int]($radius*0.7))
+                $shapeRadius = $rand.Next([int]($radius * 0.05), [int]($radius * 0.7))
                 $shapeW = [int]($shapeRadius * (0.6 + $rand.NextDouble()))
                 $shapeH = [int]($shapeRadius * (0.3 + $rand.NextDouble()))
-                $relX = ($rand.NextDouble() * ($radius*0.8) - ($radius*0.4))
-                $relY = ($rand.NextDouble() * ($radius*0.8) - ($radius*0.4))
+                $relX = ($rand.NextDouble() * ($radius * 0.8) - ($radius * 0.4))
+                $relY = ($rand.NextDouble() * ($radius * 0.8) - ($radius * 0.4))
                 $col = $palette[$rand.Next(0, $palette.Count)]
                 $brush = New-Object System.Drawing.SolidBrush $col
 
@@ -665,10 +729,10 @@ class SchedulerScreenSaver {
             }
 
             # add radial rings
-            $ringPen = New-Object System.Drawing.Pen([Color]::FromArgb(60,255,255,255), 1)
+            $ringPen = New-Object System.Drawing.Pen([Color]::FromArgb(60, 255, 255, 255), 1)
             # Draw several concentric rings to add structure to the kaleidoscope
             for ($r = 1; $r -le 3; $r++) {
-                $g.DrawEllipse($ringPen, $cx - ($radius*$r/3), $cy - ($radius*$r/3), ($radius*2*$r/3), ($radius*2*$r/3))
+                $g.DrawEllipse($ringPen, $cx - ($radius * $r / 3), $cy - ($radius * $r / 3), ($radius * 2 * $r / 3), ($radius * 2 * $r / 3))
             }
             $ringPen.Dispose()
 
@@ -876,35 +940,74 @@ class SchedulerScreenSaver {
     [void]InjectScheduledTaskIn30Seconds() {
         try {
             $now = [DateTime]::Now
-            $due = $now.AddSeconds(30)
-            # Use the actual due time for display so injected tasks behave like schedule entries
-            $timeString = $due.ToString('HH:mm')
-            $names = "frank:maria"
+            # Base due time 30 seconds from now; we'll create per-person tasks around this
+            $baseDue = $now.AddSeconds(30)
+            # Names list: colon-separated values; duplicate names are allowed and treated individually
+            $names = "chris:kevin:frank:maria"
             $days = "Sunday-Saturday"
             $action = "Injected Test"
             $short = "Injected"
 
-            $taskObj = [PSCustomObject]@{
-                Time        = $timeString
-                Name        = $names
-                DaysOfWeek  = $days
-                Action      = $action
-                short_title = $short
+            $nameList = @($names -split ':' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($nameList.Count -eq 0) { Write-Host "No names to inject"; return }
+
+            foreach ($person in $nameList) {
+                try {
+                    # First task for this person at baseDue
+                    $due1 = $baseDue
+                    $timeString1 = $due1.ToString('HH:mm')
+                    $taskObj1 = [PSCustomObject]@{
+                        Time        = $timeString1
+                        Name        = $person
+                        DaysOfWeek  = $days
+                        Action      = $action
+                        short_title = $short
+                    }
+                    $taskKey1 = "$($taskObj1.Time)|$($taskObj1.Name)|$($taskObj1.Action)"
+                    $this.TodaysTasks[$taskKey1] = @{
+                        Task           = $taskObj1
+                        DateTime       = $due1
+                        Completed      = $false
+                        Called         = $false
+                        AssignedPerson = $person
+                    }
+
+                    # Second task for this person two minutes later
+                    $due2 = $baseDue.AddMinutes(2)
+                    $timeString2 = $due2.ToString('HH:mm')
+                    $taskObj2 = [PSCustomObject]@{
+                        Time        = $timeString2
+                        Name        = $person
+                        DaysOfWeek  = $days
+                        Action      = $action
+                        short_title = $short
+                    }
+                    $taskKey2 = "$($taskObj2.Time)|$($taskObj2.Name)|$($taskObj2.Action)"
+                    $this.TodaysTasks[$taskKey2] = @{
+                        Task           = $taskObj2
+                        DateTime       = $due2
+                        Completed      = $false
+                        Called         = $false
+                        AssignedPerson = $person
+                    }
+
+                    Write-Host "Injected tasks for '$($person)' at $($due1.ToString('HH:mm:ss')) and $($due2.ToString('HH:mm:ss')) (keys: $taskKey1, $taskKey2)"
+                }
+                catch {
+                    Write-Host "ERROR injecting tasks for $($person): $($_.Exception.Message)"
+                    continue
+                }
             }
-
-            # Use the same key format as schedule-loaded tasks so injected scheduled
-            # tasks behave identically for rotation and logging.
-            $taskKey = "$($taskObj.Time)|$($taskObj.Name)|$($taskObj.Action)"
-
-            $this.TodaysTasks[$taskKey] = @{
-                Task           = $taskObj
-                DateTime       = $due
-                Completed      = $false
-                Called         = $false
-                AssignedPerson = $null
+            # Immediately refresh UI so injected tasks appear without waiting for the next timer tick
+            try {
+                $this.UpdatePersonTaskDisplays()
+                $this.UpdateNextTaskDisplay()
+                try { $this.MainPanel.Refresh() } catch { }
+                try { $this.Form.Refresh() } catch { }
             }
-
-            Write-Host "Injected scheduled task '$action' for [$names] at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+            catch {
+                Write-Host "Warning: failed to refresh UI after injection: $($_.Exception.Message)"
+            }
         }
         catch {
             Write-Host "ERROR in InjectScheduledTaskIn30Seconds: $($_.Exception.Message)"
@@ -944,11 +1047,23 @@ class SchedulerScreenSaver {
             }
 
             Write-Host "Injected single-person task '$action' for [$names] at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+            # Immediately refresh UI so the injected single-person task appears
+            try {
+                $this.UpdatePersonTaskDisplays()
+                $this.UpdateNextTaskDisplay()
+                try { $this.MainPanel.Refresh() } catch { }
+                try { $this.Form.Refresh() } catch { }
+            }
+            catch {
+                Write-Host "Warning: failed to refresh UI after InjectPersonTaskIn30Seconds: $($_.Exception.Message)"
+            }
         }
         catch {
             Write-Host "ERROR in InjectPersonTaskIn30Seconds: $($_.Exception.Message)"
         }
     }
+
+    
 
     # InjectContentTaskIn30Seconds
     # Creates an injected content task (jokes/story/quotes) due in 30 seconds.
@@ -984,6 +1099,16 @@ class SchedulerScreenSaver {
             }
 
             Write-Host "Injected content task '$action' at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+            # Immediately refresh UI so the injected content task appears
+            try {
+                $this.UpdatePersonTaskDisplays()
+                $this.UpdateNextTaskDisplay()
+                try { $this.MainPanel.Refresh() } catch { }
+                try { $this.Form.Refresh() } catch { }
+            }
+            catch {
+                Write-Host "Warning: failed to refresh UI after InjectContentTaskIn30Seconds: $($_.Exception.Message)"
+            }
         }
         catch {
             Write-Host "ERROR in InjectContentTaskIn30Seconds: $($_.Exception.Message)"
@@ -1000,7 +1125,16 @@ class SchedulerScreenSaver {
             Write-Host "Loading today's tasks"
             $now = [DateTime]::Now
             $currentDay = $now.DayOfWeek.ToString()
-            $this.TodaysTasks = @{}
+            # Preserve any existing injected task instances so they are not lost
+            # when reloading the schedule at runtime. Merge existing keys into
+            # the new collection so injected tasks remain visible immediately.
+            $existing = @{}
+            if ($this.TodaysTasks) {
+                foreach ($k in $this.TodaysTasks.Keys) {
+                    try { $existing[$k] = $this.TodaysTasks[$k] } catch { }
+                }
+            }
+            $this.TodaysTasks = $existing
             
             # Iterate each scheduled row to build today's tasks list
             foreach ($task in $this.Schedule) {
@@ -1020,12 +1154,17 @@ class SchedulerScreenSaver {
                         }
                         catch { $assigned = $null }
 
-                        $this.TodaysTasks[$taskKey] = @{
-                            Task           = $task
-                            DateTime       = $taskDateTime
-                            Completed      = $false
-                            Called         = $false
-                            AssignedPerson = $assigned
+                        # Only add schedule-derived entries if an injected/explicit
+                        # instance with the same key does not already exist. This
+                        # prevents LoadTodaysTasks from overwriting manual injections.
+                        if (-not $this.TodaysTasks.ContainsKey($taskKey)) {
+                            $this.TodaysTasks[$taskKey] = @{
+                                Task           = $task
+                                DateTime       = $taskDateTime
+                                Completed      = $false
+                                Called         = $false
+                                AssignedPerson = $assigned
+                            }
                         }
                     }
                 }
@@ -1239,7 +1378,7 @@ class SchedulerScreenSaver {
                         $taskKey = $g.Name
                         # Rows contain AnchorDate, Position, Name
                         $anchor = $g.Group | Select-Object -First 1 | Select-Object -ExpandProperty AnchorDate
-                        $ordered = $g.Group | Sort-Object -Property @{Expression={[int]$_.Position}} | ForEach-Object { $_.Name }
+                        $ordered = $g.Group | Sort-Object -Property @{Expression = { [int]$_.Position } } | ForEach-Object { $_.Name }
                         $this.TaskState2[$taskKey] = @{ AnchorDate = $anchor; Names = $ordered }
                     }
                     Write-Host "Loaded task_state2 with $($this.TaskState2.Count) rotation definitions"
@@ -1282,10 +1421,10 @@ class SchedulerScreenSaver {
                     for ($i = 0; $i -lt $names.Count; $i++) {
                         $pos = $i + 1
                         $row = [PSCustomObject]@{
-                            TaskKey = $rotationKey
+                            TaskKey    = $rotationKey
                             AnchorDate = $anchorDate
-                            Position = $pos
-                            Name = $names[$i]
+                            Position   = $pos
+                            Name       = $names[$i]
                         }
                         $rows += $row
                     }
@@ -1362,7 +1501,7 @@ class SchedulerScreenSaver {
                     if ($this.IsDayInRange($d.DayOfWeek.ToString(), $daysPart)) { $back++ }
                     $d = $d.AddDays(1)
                 }
-                $occurrences = -$back
+                $occurrences = - $back
             }
 
             # anchor position is names[0] (Position 1)
@@ -1379,50 +1518,69 @@ class SchedulerScreenSaver {
     }
 
     [void]DumpUpcomingAssignments([int]$days = 10) {
-    # DumpUpcomingAssignments
-    # Logs the computed assignment for the next N days for each rotating task.
-    # Parameters:
-    #  - $days: integer number of days to include (default 10)
-    # Uses GetAssignedPersonForDate() to compute assignments and writes to console.
+        # DumpUpcomingAssignments
+        # Logs the computed assignment for the next N days for each rotating task.
+        # Parameters:
+        #  - $days: integer number of days to include (default 10)
+        # Uses GetAssignedPersonForDate() to compute assignments and writes to console.
     
         try {
-            Write-Host "Dumping upcoming assignments for next $days days"
-            # Ensure TaskState2 loaded
+            Write-Host "Today's scheduled tasks (date/time -> person -> action):"
+            # Ensure TaskState2 loaded so we can compute rotating assignments
             try { if (-not $this.TaskState2 -or $this.TaskState2.Count -eq 0) { $this.EnsureTaskState2() } } catch { Write-Host "Warning: EnsureTaskState2 failed: $($_.Exception.Message)" }
 
             $today = [DateTime]::Today
-            # Iterate each schedule entry to list rotating schedules for the dump
-            foreach ($sched in $this.Schedule) {
+            # Ensure today's tasks are loaded (this will include injected tasks)
+            try { if (-not $this.TodaysTasks -or $this.TodaysTasks.Count -eq 0) { $this.LoadTodaysTasks() } } catch { Write-Host "Warning: LoadTodaysTasks failed: $($_.Exception.Message)" }
+
+            $list = @()
+            # Collect each today's task instance and resolve the display person
+            foreach ($taskKey in $this.TodaysTasks.Keys) {
                 try {
-                    $namesRaw = $sched.Name.ToString()
-                    if ([string]::IsNullOrWhiteSpace($namesRaw)) { continue }
-                    if ($namesRaw -notmatch ':') { continue }
+                    $tinfo = $this.TodaysTasks[$taskKey]
+                    $dt = $tinfo.DateTime
+                    if ($dt.Date -ne $today) { continue }
+                    $task = $tinfo.Task
 
-                    $rotationKey = "$($sched.Time.ToString().Trim())|$($sched.DaysOfWeek.ToString().Trim())|$($sched.Action.ToString().Trim())"
-                    Write-Host "--- Rotation: $rotationKey ---"
+                    # Prefer AssignedPerson if the task instance recorded it
+                    $person = $null
+                    if ($tinfo.PSObject.Properties.Name -contains 'AssignedPerson' -and -not [string]::IsNullOrWhiteSpace($tinfo.AssignedPerson)) {
+                        $person = $tinfo.AssignedPerson.ToString().Trim()
+                    }
+                    else {
+                        $names = @((($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
+                        if ($names.Count -eq 0) { $person = 'Unassigned' }
+                        elseif ($names.Count -eq 1) { $person = $names[0] }
+                        else {
+                            $rotationKey = "$($task.Time.ToString().Trim())|$($task.DaysOfWeek.ToString().Trim())|$($task.Action.ToString().Trim())"
+                            try { $person = $this.GetAssignedPersonForDate($rotationKey, $dt) } catch { $person = $names[0] }
+                            if (-not $person) { $person = $names[0] }
+                        }
+                    }
 
-                    # Advance day-by-day to compute assignments for each future date in the dump
-                    for ($d = 0; $d -lt $days; $d++) {
-                        $date = $today.AddDays($d)
-                        # Only show dates where the schedule runs
-                        if (-not $this.IsDayInRange($date.DayOfWeek.ToString(), $sched.DaysOfWeek.ToString())) { continue }
-                        # build a DateTime at the scheduled time for accurate mapping
-                        try {
-                            $taskTime = [DateTime]::ParseExact($sched.Time, 'HH:mm', $null)
-                            $taskDateTime = [DateTime]::new($date.Year, $date.Month, $date.Day, $taskTime.Hour, $taskTime.Minute, 0)
-                        }
-                        catch {
-                            $taskDateTime = $date
-                        }
-                        $person = $this.GetAssignedPersonForDate($rotationKey, $taskDateTime)
-                        Write-Host "$($date.ToString('yyyy-MM-dd')) $($date.DayOfWeek) $($sched.Time) - $($sched.Action) => $person"
+                    $list += [PSCustomObject]@{
+                        DateTime = $dt
+                        Time     = $dt.ToString('h:mm tt')
+                        Action   = $task.Action
+                        Person   = $person
                     }
                 }
                 catch {
-                    Write-Host "Error dumping rotation for $($sched.Action): $($_.Exception.Message)"
+                    Write-Host "Warning: failed while collecting task for dump: $($_.Exception.Message)"
+                    continue
                 }
             }
-            Write-Host "Finished dump"
+
+            if ($list.Count -eq 0) {
+                Write-Host "No tasks scheduled for today."
+                return
+            }
+
+            $list = $list | Sort-Object -Property DateTime
+            foreach ($entry in $list) {
+                Write-Host "$($entry.DateTime.ToString('yyyy-MM-dd')) $($entry.Time) - $($entry.Person) - $($entry.Action)"
+            }
+            Write-Host "Finished listing today's tasks"
         }
         catch {
             Write-Host "ERROR in DumpUpcomingAssignments: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
@@ -1430,23 +1588,24 @@ class SchedulerScreenSaver {
     }
 
     [void]CheckScheduledTasks() {
-    # CheckScheduledTasks
-    # Iterates over `$this.TodaysTasks` and determines if any task is due.
-    # For content tasks (story/quotes/jokes) it selects a non-repeating entry,
-    # speaks and displays alerts, logs to `$this.LogFile`, and marks tasks called/completed.
-    # For rotating person tasks it computes/updates rotation state and persists it.
-    # This method is the runtime executor for scheduled items.
-    
+        # CheckScheduledTasks
+        # Iterates over `$this.TodaysTasks` and determines if any task is due.
+        # For content tasks (story/quotes/jokes) it selects a non-repeating entry,
+        # speaks and displays alerts, logs to `$this.LogFile`, and marks tasks called/completed.
+        # For rotating person tasks it computes/updates rotation state and persists it.
+        # This method is the runtime executor for scheduled items.
+        write-Host "Checking scheduled tasks..."
+
         $helloTimer = [System.Windows.Forms.Timer]::new()
-                                $helloTimer.Add_Tick({ param($s, $ev)
-                                        try {
-                                            $s.Stop()
-                                            [Audio]::SetVolume(0.0)
-                                        }
-                                        catch {
-                                            Write-Host "HelloTimer tick error: $($_.Exception.Message)"
-                                        }
-                                    })
+        $helloTimer.Add_Tick({ param($s, $ev)
+                try {
+                    $s.Stop()
+                    [Audio]::SetVolume(0.0)
+                }
+                catch {
+                    Write-Host "HelloTimer tick error: $($_.Exception.Message)"
+                }
+            })
                                     
         try {
             
@@ -1455,25 +1614,33 @@ class SchedulerScreenSaver {
                 Write-Host "TodaysTasks not loaded - loading now"
                 $this.LoadTodaysTasks()
             }
+            
+            Write-Host "Count $($this.TodaysTasks.Count)"
             # Iterate today's tasks to check each task for due/executing state
             foreach ($taskKey in $this.TodaysTasks.Keys) {
                 try {
                     $taskInfo = $this.TodaysTasks[$taskKey]
+                    
                     if ($taskInfo.Completed -or $taskInfo.Called) {
                         continue
                     }
+
                     $task = $taskInfo.Task
                     $taskDateTime = $taskInfo.DateTime
+                    
                     $timeDiffSeconds = ($now - $taskDateTime).TotalSeconds
+                    
                     if ($this.DebugMode) {
-                        Write-Host "Checking task '$($task.Action)' at $($task.Time), diff: $timeDiffSeconds seconds"
+                        Write-Host "Checking task '$($task.Action)' $($task.Name) at $($task.Time), diff: $timeDiffSeconds seconds"
                     }
-                    if ($timeDiffSeconds -gt 60) {
+
+                    if ($timeDiffSeconds -gt 20) {
                         Write-Host "Task expired, marking completed: $taskKey"
                         $this.TodaysTasks[$taskKey].Completed = $true
                         continue
                     }
-                    if ([Math]::Abs($timeDiffSeconds) -le 60) {
+
+                    if ([Math]::Abs($timeDiffSeconds) -le 20) {
                         $personForLog = "Unknown"
                         $alertMessage = ""
                         $speechText = ""
@@ -1608,7 +1775,7 @@ class SchedulerScreenSaver {
                         $this.AlertTextBox.Text = $alertMessage
                         $this.AlertTextBox.Visible = $true
                         $this.IsShowingAlert = $true
-                        $this.AlertEndTime = $now.AddSeconds(15)
+                        $this.AlertEndTime = $now.AddSeconds(20)
                         $this.MainPanel.Visible = $false
                         # Speak alert
                         Write-Host "Speaking: $speechText"
@@ -1655,14 +1822,14 @@ class SchedulerScreenSaver {
     }
 
     [bool]IsDayInRange([string]$currentDay, [string]$range) {
-    # IsDayInRange
-    # Returns true if `$currentDay` (e.g., 'Monday') is included in `$range`.
-    # Supported range formats:
-    #  - 'Sunday-Saturday' | 'All' | '*' => all days
-    #  - Comma-separated list: 'Monday,Wednesday,Friday'
-    #  - Range: 'Monday-Friday'
-    #  - Single day name: 'Tuesday'
-    # This helper centralizes day-range parsing used throughout the scheduler.
+        # IsDayInRange
+        # Returns true if `$currentDay` (e.g., 'Monday') is included in `$range`.
+        # Supported range formats:
+        #  - 'Sunday-Saturday' | 'All' | '*' => all days
+        #  - Comma-separated list: 'Monday,Wednesday,Friday'
+        #  - Range: 'Monday-Friday'
+        #  - Single day name: 'Tuesday'
+        # This helper centralizes day-range parsing used throughout the scheduler.
     
         try {
             if ([string]::IsNullOrWhiteSpace($range)) {
@@ -1704,11 +1871,11 @@ class SchedulerScreenSaver {
     }
 
     [void]UpdateNextTaskDisplay() {
-    # UpdateNextTaskDisplay
-    # Recomputes and updates the 'Last' and 'Next' labels shown in the UI.
-    # - Builds a list of today's tasks, resolves display person (prefers AssignedPerson),
-    # - Picks the most recent past task as Last and the next future task as Next,
-    # - Updates `$this.LastTaskLabel` and `$this.NextTaskLabel` accordingly.
+        # UpdateNextTaskDisplay
+        # Recomputes and updates the 'Last' and 'Next' labels shown in the UI.
+        # - Builds a list of today's tasks, resolves display person (prefers AssignedPerson),
+        # - Picks the most recent past task as Last and the next future task as Next,
+        # - Updates `$this.LastTaskLabel` and `$this.NextTaskLabel` accordingly.
     
         try {
             
@@ -1786,41 +1953,73 @@ class SchedulerScreenSaver {
     }
 
     [void]UpdatePersonTaskDisplays() {
-    # UpdatePersonTaskDisplays
-    # Rebuilds person panels shown under the main panel. For each unique person
-    # the method collects tasks assigned to them today (including injected tasks),
-    # creates a compact panel showing time and short title, and grays-out completed tasks.
-    # This keeps the UI in sync with rotation state and today's tasks.
+        # UpdatePersonTaskDisplays
+        # Rebuilds person panels shown under the main panel. For each unique person
+        # the method collects tasks assigned to them today (including injected tasks),
+        # creates a compact panel showing time and short title, and grays-out completed tasks.
+        # This keeps the UI in sync with rotation state and today's tasks.
     
         try {
-            #if ($this.DebugMode) { Write-Host "Updating person task displays" }
+            # Build panels exclusively from today's task instances (TodaysTasks) so assignments match runtime state
             $now = [DateTime]::Now
-            $currentDay = $now.DayOfWeek.ToString()
+            $today = $now.Date
+
+            # Map person -> list of task entries (each entry has DateTime, Action, short_title, Completed)
+            $personMap = @{}
             $allPersons = @()
-            # Aggregate persons by scanning schedule names to construct panel lists
-            foreach ($task in $this.Schedule) {
-                $names = @((($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
-                $allPersons += $names
+
+            # Ensure TodaysTasks is present
+            if (-not $this.TodaysTasks -or $this.TodaysTasks.Count -eq 0) {
+                try { $this.LoadTodaysTasks() } catch { }
             }
-            # Include any names from injected/today's tasks so they appear in panels
-            # Include names from injected/today's tasks so panels reflect current instances
+
             foreach ($tinfo in $this.TodaysTasks.Values) {
                 try {
-                    $t = $tinfo.Task
-                    if ($null -ne $t -and -not [string]::IsNullOrWhiteSpace($t.Name)) {
-                        $names = @((($t.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
-                        $allPersons += $names
+                    $dt = $tinfo.DateTime
+                    if ($dt.Date -ne $today) { continue }
+                    $task = $tinfo.Task
+
+                    # Resolve responsible person: prefer AssignedPerson recorded on the instance
+                    $person = $null
+                    if ($tinfo.PSObject.Properties.Name -contains 'AssignedPerson' -and -not [string]::IsNullOrWhiteSpace($tinfo.AssignedPerson)) {
+                        $person = $tinfo.AssignedPerson.ToString().Trim()
                     }
+                    else {
+                        $names = @((($task.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
+                        if ($names.Count -eq 0) { $person = 'Unassigned' }
+                        elseif ($names.Count -eq 1) { $person = $names[0] }
+                        else {
+                            # Multi-person rotation: compute assignment deterministically for this DateTime
+                            $rotationKey = "$($task.Time.ToString().Trim())|$($task.DaysOfWeek.ToString().Trim())|$($task.Action.ToString().Trim())"
+                            try { $person = $this.GetAssignedPersonForDate($rotationKey, $dt) } catch { $person = $names[0] }
+                            if (-not $person) { $person = $names[0] }
+                        }
+                    }
+
+                    if (-not $personMap.ContainsKey($person)) { $personMap[$person] = @() }
+                    $personMap[$person] += [PSCustomObject]@{
+                        DateTime    = $dt
+                        Time        = $dt.ToString('HH:mm')
+                        Action      = $task.Action
+                        short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
+                        Completed   = $tinfo.Completed
+                        Called      = $tinfo.Called
+                    }
+                    $allPersons += $person
                 }
-                catch { continue }
+                catch {
+                    continue
+                }
             }
+
             $uniquePersons = $allPersons | Sort-Object -Unique
-            # Clear existing panels
+
             # Remove existing person panels from the UI before rebuilding
             foreach ($panel in $this.PersonTaskPanels.Values) {
-                $this.MainPanel.Controls.Remove($panel)
+                try { $this.MainPanel.Controls.Remove($panel) } catch { }
             }
             $this.PersonTaskPanels = @{}
+
             # Setup layout constants for 3 columns
             $panelWidth = 300
             $maxPerColumn = 2
@@ -1835,142 +2034,15 @@ class SchedulerScreenSaver {
             $countCol1 = 0
             $countCol2 = 0
             $countCol3 = 0
-            # Build a panel for each unique person showing their tasks for today
+
             foreach ($person in $uniquePersons) {
                 try {
-                    $personTasks = @()
-                    # Track which display keys we've already added to avoid duplicates
-                    $addedKeys = @{}
-                    # Examine each schedule entry to determine if it belongs to the current person
-                    foreach ($task in $this.Schedule) {
-                        try {
-                            $names = ($task.Name -split ':') | ForEach-Object { $_.Trim() }
-                            if (-not $this.IsDayInRange($currentDay, $task.DaysOfWeek)) { continue }
-                            if ($names.Count -gt 1) {
-                                $rotationKey = "$($task.Time)|$($task.DaysOfWeek)|$($task.Action)"
-                                $assigned = $names[0]
-                                if ($this.TaskState.ContainsKey($rotationKey)) {
-                                    $lastPerson = $this.TaskState[$rotationKey]
-                                    if ($null -ne $lastPerson) { $lastPerson = $lastPerson.ToString().Trim() }
-                                    $currentIndex = -1
-                                    # Iterate participants to find the index of the last person and determine the next assigned person
-                                    for ($i = 0; $i -lt $names.Count; $i++) {
-                                        if ($names[$i].Equals($lastPerson, [System.StringComparison]::InvariantCultureIgnoreCase)) {
-                                            $currentIndex = $i
-                                            break
-                                        }
-                                    }
-                                    if ($currentIndex -eq -1 -or $currentIndex -ge ($names.Count - 1)) {
-                                        $assigned = $names[0]
-                                    }
-                                    else {
-                                        $assigned = $names[$currentIndex + 1]
-                                    }
-                                }
-                                if ($assigned -eq $person) {
-                                    $displayKey = "$($task.Time)|$person|$($task.Action)"
-                                    if (-not $addedKeys.ContainsKey($displayKey)) {
-                                        $personTasks += [PSCustomObject]@{
-                                            Time        = $task.Time
-                                            Action      = $task.Action
-                                            short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
-                                        }
-                                        $addedKeys[$displayKey] = $true
-                                    }
-                                }
-                            }
-                            else {
-                                if ($names -contains $person) {
-                                    $displayKey = "$($task.Time)|$person|$($task.Action)"
-                                    if (-not $addedKeys.ContainsKey($displayKey)) {
-                                        $personTasks += [PSCustomObject]@{
-                                            Time        = $task.Time
-                                            Action      = $task.Action
-                                            short_title = if ($task.PSObject.Properties.Name -contains 'short_title') { $task.short_title } else { $null }
-                                        }
-                                        $addedKeys[$displayKey] = $true
-                                    }
-                                }
-                            }
-                        }
-                        catch {
-                            Write-Host "ERROR processing task for person '$person' - Action: '$($task.Action)': $($_.Exception.Message)"
-                            continue
-                        }
-                    }
-                    # Also account for injected or today's tasks present in TodaysTasks
-                    # Also consider injected/today task instances when assigning tasks to panels
-                    foreach ($tinfo in $this.TodaysTasks.Values) {
-                        try {
-                            $t = $tinfo.Task
-                            if (-not $this.IsDayInRange($currentDay, $t.DaysOfWeek)) { continue }
-                            # If this specific instance already had an AssignedPerson recorded,
-                            # use that for placement (this covers completed/ran tasks).
-                            if ($tinfo.PSObject.Properties.Name -contains 'AssignedPerson' -and -not [string]::IsNullOrWhiteSpace($tinfo.AssignedPerson)) {
-                                if ($tinfo.AssignedPerson.ToString().Trim().Equals($person, [System.StringComparison]::InvariantCultureIgnoreCase)) {
-                                    $displayKey = "$($t.Time)|$person|$($t.Action)"
-                                    if (-not $addedKeys.ContainsKey($displayKey)) {
-                                        $personTasks += [PSCustomObject]@{
-                                            Time        = $t.Time
-                                            Action      = $t.Action
-                                            short_title = if ($t.PSObject.Properties.Name -contains 'short_title') { $t.short_title } else { $null }
-                                        }
-                                        $addedKeys[$displayKey] = $true
-                                    }
-                                    continue
-                                }
-                            }
-                            $names = @((($t.Name -split ':') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
-                            # Determine rotation time anchor (injected tasks may set RotationAnchor)
-                            $timeForRotation = if ($t.PSObject.Properties.Name -contains 'RotationAnchor') { $t.RotationAnchor } else { $t.Time }
-                            if ($names.Count -gt 1) {
-                                $rotationKey = "$($timeForRotation)|$($t.DaysOfWeek)|$($t.Action)"
-                                $assigned = $names[0]
-                                if ($this.TaskState.ContainsKey($rotationKey)) {
-                                    $lastPerson = $this.TaskState[$rotationKey]
-                                    if ($null -ne $lastPerson) { $lastPerson = $lastPerson.ToString().Trim() }
-                                    $currentIndex = -1
-                                    # Iterate participants to find the index of the last person and determine the next assigned person
-                                    for ($i = 0; $i -lt $names.Count; $i++) {
-                                        if ($names[$i].Equals($lastPerson, [System.StringComparison]::InvariantCultureIgnoreCase)) {
-                                            $currentIndex = $i; break
-                                        }
-                                    }
-                                    if ($currentIndex -eq -1 -or $currentIndex -ge ($names.Count - 1)) { $assigned = $names[0] }
-                                    else { $assigned = $names[$currentIndex + 1] }
-                                }
-                                if ($assigned -eq $person) {
-                                    $displayKey = "$($t.Time)|$person|$($t.Action)"
-                                    if (-not $addedKeys.ContainsKey($displayKey)) {
-                                        $personTasks += [PSCustomObject]@{
-                                            Time        = $t.Time
-                                            Action      = $t.Action
-                                            short_title = if ($t.PSObject.Properties.Name -contains 'short_title') { $t.short_title } else { $null }
-                                        }
-                                        $addedKeys[$displayKey] = $true
-                                    }
-                                }
-                            }
-                            else {
-                                if ($names -contains $person) {
-                                    $displayKey = "$($t.Time)|$person|$($t.Action)"
-                                    if (-not $addedKeys.ContainsKey($displayKey)) {
-                                        $personTasks += [PSCustomObject]@{
-                                            Time        = $t.Time
-                                            Action      = $t.Action
-                                            short_title = if ($t.PSObject.Properties.Name -contains 'short_title') { $t.short_title } else { $null }
-                                        }
-                                        $addedKeys[$displayKey] = $true
-                                    }
-                                }
-                            }
-                        }
-                        catch {
-                            continue
-                        }
-                    }
-                    if ($personTasks.Count -eq 0) { continue }
-                    $personTasks = $personTasks | Sort-Object { [DateTime]::ParseExact($_.Time, "HH:mm", $null) }
+                    $personTasks = $personMap[$person]
+                    if (-not $personTasks -or $personTasks.Count -eq 0) { continue }
+
+                    # Sort tasks by DateTime
+                    $personTasks = $personTasks | Sort-Object -Property DateTime
+
                     $panel = [Panel]::new()
                     $panel.BackColor = [Color]::FromArgb(50, 50, 50, 50)
                     # Size the panel tightly to the number of tasks: name label + task lines
@@ -1978,6 +2050,7 @@ class SchedulerScreenSaver {
                     $headerHeight = 30
                     $panelHeight = [Math]::Max(50, $headerHeight + ($personTasks.Count * $lineHeight) + 10)
                     $panel.Size = [Size]::new($panelWidth, $panelHeight)
+
                     # Assign to column
                     if ($countCol1 -lt $maxPerColumn) {
                         $panel.Location = [Point]::new($leftX, $yOffsetCol1)
@@ -1994,53 +2067,44 @@ class SchedulerScreenSaver {
                         $yOffsetCol3 += $panel.Height + 20
                         $countCol3++
                     }
-                    # Add content
+
+                    # Add header
                     $nameLabel = [Label]::new()
-                    if ($person -eq "") {
-                        $nameLabel.Text = "Unassigned Tasks:"
-                    }
-                    else {
-                        $nameLabel.Text = "$person's Tasks:"
-                    }
+                    if ($person -eq "") { $nameLabel.Text = "Unassigned Tasks:" } else { $nameLabel.Text = "$person's Tasks:" }
                     $nameLabel.Font = [Font]::new("Arial", 16, [FontStyle]::Bold)
                     $nameLabel.ForeColor = [Color]::White
                     $nameLabel.AutoSize = $true
                     $nameLabel.Location = [Point]::new(10, 10)
                     $panel.Controls.Add($nameLabel)
+
                     $yPos = 40
-                    # Create UI labels for each task assigned to this person
-                    foreach ($task in $personTasks) {
+                    foreach ($taskEntry in $personTasks) {
                         try {
                             $taskLabel = [Label]::new()
-                            $taskTime = [DateTime]::ParseExact($task.Time, "HH:mm", $null)
-                            $displayTime = $taskTime.ToString("h:mm tt")
-                            $displayText = if (![string]::IsNullOrWhiteSpace($task.short_title)) {
-                                $task.short_title
-                            }
-                            else {
-                                $truncated = $task.Action.Substring(0, [Math]::Min(18, $task.Action.Length))
-                                if ($task.Action.Length -gt 18) { "$truncated..." } else { $truncated }
+                            $taskDateTime = $taskEntry.DateTime
+                            $displayTime = $taskDateTime.ToString("h:mm tt")
+                            $displayText = if (-not [string]::IsNullOrWhiteSpace($taskEntry.short_title)) { $taskEntry.short_title } else {
+                                $truncated = $taskEntry.Action.Substring(0, [Math]::Min(18, $taskEntry.Action.Length))
+                                if ($taskEntry.Action.Length -gt 18) { "$truncated..." } else { $truncated }
                             }
                             $taskLabel.Text = "$displayTime - $displayText"
                             $taskLabel.Font = [Font]::new("Arial", 14, [FontStyle]::Regular)
                             $taskLabel.AutoSize = $true
                             $taskLabel.Location = [Point]::new(20, $yPos)
-                            $taskDateTime = [DateTime]::new($now.Year, $now.Month, $now.Day, $taskTime.Hour, $taskTime.Minute, 0)
-                            $taskKey = "$($task.Time)|$person|$($task.Action)"
-                            if ($taskDateTime -lt $now -or ($this.TodaysTasks.ContainsKey($taskKey) -and $this.TodaysTasks[$taskKey].Completed)) {
+                            if ($taskEntry.DateTime -lt $now -or $taskEntry.Completed) {
                                 $taskLabel.ForeColor = [Color]::Gray
                             }
                             else {
                                 $taskLabel.ForeColor = [Color]::LightCyan
                             }
                             $panel.Controls.Add($taskLabel)
-                            $yPos += 25
+                            $yPos += $lineHeight
                         }
                         catch {
-                            Write-Host "ERROR creating task label for person '$person' - Action: '$($task.Action)': $($_.Exception.Message)"
                             continue
                         }
                     }
+
                     $this.MainPanel.Controls.Add($panel)
                     $this.PersonTaskPanels[$person] = $panel
                 }
@@ -2056,10 +2120,10 @@ class SchedulerScreenSaver {
     }
 
     [void]CleanupAndExit() {
-    # CleanupAndExit
-    # Gracefully disposes UI resources, timers, and the speech synthesizer.
-    # Resets volume if necessary and disposes images and controls.
-    # Should be called when the app exits to avoid resource leaks.
+        # CleanupAndExit
+        # Gracefully disposes UI resources, timers, and the speech synthesizer.
+        # Resets volume if necessary and disposes images and controls.
+        # Should be called when the app exits to avoid resource leaks.
     
         try {
             Write-Host "Cleaning up and exiting"
