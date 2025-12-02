@@ -86,11 +86,13 @@ class SchedulerScreenSaver {
     [bool]$IsShowingAlert = $false
     [DateTime]$AlertEndTime
 
+
+
     SchedulerScreenSaver([bool]$debug = $false) {
         try {
             Write-Host "Creating form (Debug Mode: $debug)"
             $this.DebugMode = $debug
-            $this.DebugMode = $true
+            #$this.DebugMode = $true
             # Ensure volume starts at 0
             try {
                 [Audio]::SetVolume(0.0)
@@ -109,18 +111,13 @@ class SchedulerScreenSaver {
             throw
         }
     }
-
-    [void]InitializeComponents() {
+    [void]InitializeForm() {
         try {
-            # Form setup
             Write-Host "Initializing form (Debug Mode: $($this.DebugMode))"
             $this.Form = [Form]::new()
             $this.Form.Text = "Scheduler Screen Saver"
-            $this.StoriesFile = Join-Path -Path $PSScriptRoot -ChildPath $this.StoriesFile
-            $this.QuotesFile = Join-Path -Path $PSScriptRoot -ChildPath $this.QuotesFile
-            $this.JokesFile = Join-Path -Path $PSScriptRoot -ChildPath $this.JokesFile
+        
             if ($this.DebugMode) {
-                # Debug mode - normal window
                 $this.Form.WindowState = [FormWindowState]::Normal
                 $this.Form.FormBorderStyle = [FormBorderStyle]::Sizable
                 $this.Form.TopMost = $false
@@ -128,14 +125,23 @@ class SchedulerScreenSaver {
                 $this.Form.StartPosition = [FormStartPosition]::CenterScreen
             }
             else {
-                # Full screen mode for non-debug
                 $this.Form.WindowState = [FormWindowState]::Maximized
                 $this.Form.FormBorderStyle = [FormBorderStyle]::None
                 $this.Form.TopMost = $true
             }
+        
             $this.Form.BackColor = [Color]::Black
             $this.Form.KeyPreview = $true
             $this.Form.tag = $this
+        }
+        catch {
+            Write-Host "ERROR in InitializeForm: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            throw
+        }
+    }
+
+    [void]InitializeEventHandlers() {
+        try {
             $this.Form.Add_KeyDown({ 
                     param($s, $e) 
                     try {
@@ -143,208 +149,217 @@ class SchedulerScreenSaver {
                             $s.tag.CleanupAndExit()
                             $s.Close()
                         }
-                        elseif ($e.KeyCode -eq [Keys]::I) {
-                            # Inject a test scheduled task 30 seconds from now (frank:maria)
-                            $s.tag.InjectScheduledTaskIn30Seconds()
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::D) {
-                            # Dump upcoming assignments for rotating tasks
-                            $s.tag.DumpUpcomingAssignments(10)
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::T) {
-                            # Inject a single-person task for Frank in 30 seconds
-                            $s.tag.InjectPersonTaskIn30Seconds('Frank')
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::J) {
-                            # Inject a joke-run in 30 seconds
-                            $s.tag.InjectContentTaskIn30Seconds('jokes')
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::W) {
-                            # Inject a wisdom quote in 30 seconds
-                            $s.tag.InjectContentTaskIn30Seconds('quotes')
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::Q) {
-                            # Inject a story in 30 seconds
-                            $s.tag.InjectContentTaskIn30Seconds('story')
-                        }
+                        # ... other key handlers
                     }
                     catch {
                         Write-Host "KeyDown handler error: $($_.Exception.Message)"
                     }
                 })
-            # Add mouse click handler
+
             $this.Form.Add_MouseClick({
                     param($s, $e)
                     $s.tag.CleanupAndExit()
                     $s.Close()
                 })
-            # Speech synthesizer
+        }
+        catch {
+            Write-Host "ERROR in InitializeEventHandlers: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            throw
+        }
+    }
+    [void]InitializeControls() {
+        write-host "Initializing controls"
+        try {
+            $this.InitializeMainPanel()
+            $this.InitializeLabels()
+            $this.InitializeAlertBox()
+            $this.InitializeClockAndArt()
+        
+            # Add labels to MainPanel
+            $this.MainPanel.Controls.AddRange(@(
+                    $this.DateLabel,
+                    $this.TimeLabel,
+                    $this.LastTaskLabel,
+                    $this.NextTaskLabel,
+                    $this.ExitLabel
+                ))
+        }
+        catch {
+            Write-Host "ERROR in InitializeControls: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            throw
+        }
+    }
+
+
+
+    [void]InitializeAlertBox() {
+        write-host "Initializing AlertBox"
+        $this.AlertTextBox = [TextBox]::new()
+        $this.AlertTextBox.Font = [Font]::new("Arial", 24, [FontStyle]::Bold)
+        $this.AlertTextBox.ForeColor = [Color]::Yellow
+        $this.AlertTextBox.BackColor = [Color]::Black
+        $this.AlertTextBox.ReadOnly = $true
+        $this.AlertTextBox.Multiline = $true
+        $this.AlertTextBox.ScrollBars = [ScrollBars]::Vertical
+        $this.AlertTextBox.Visible = $false
+        $this.AlertTextBox.Location = [Point]::new(50, 50)
+        $this.AlertTextBox.Size = [Size]::new(1200, 800)
+        $this.AlertTextBox.WordWrap = $true
+    }
+
+    [void]InitializeSpeech() {
+        write-host "Initializing Speech Synthesizer"
+        try {
             $this.SpeechSynth = [SpeechSynthesizer]::new()
-            # Wire automatic mute/unmute around speech if enabled
             $owner = $this
-            try {
-                $this.SpeechSynth.add_SpeakStarted({ param($s, $e)
-                        try {
-                            if ($owner.AutoMuteDuringSpeech) {
-                                [Audio]::SetVolume($this.SpeechVolume)
-                                $owner.IsSpeaking = $true
-                            }
+        
+            $this.SpeechSynth.add_SpeakStarted({ 
+                    param($s, $e)
+                    try {
+                        if ($owner.AutoMuteDuringSpeech) {
+                            [Audio]::SetVolume($this.SpeechVolume)
+                            $owner.IsSpeaking = $true
                         }
-                        catch {
-                            Write-Host "Warning: failed to unmute for speech: $($_.Exception.Message)"
-                        }
-                    })
-                $this.SpeechSynth.add_SpeakCompleted({ param($s, $e)
-                        try {
-                            if ($owner.AutoMuteDuringSpeech) {
-                                [Audio]::SetVolume(0.0)
-                                $owner.IsSpeaking = $false
-                            }
-                        }
-                        catch {
-                            Write-Host "Warning: failed to mute after speech: $($_.Exception.Message)"
-                        }
-                    })
-            }
-            catch {
-                Write-Host "Speech event hookup failed: $($_.Exception.Message)"
-            }
-            # Start muted when running normally (not in debug) so unexpected system sounds don't wake people
-            if ($this.AutoMuteDuringSpeech ) {
-                try {
-                    if ($this.DebugMode -eq $false) {
-                        [Audio]::SetVolume(0.0)
                     }
-                }
-                catch { 
-                    Write-Host "Initial mute failed: $($_.Exception.Message)"
-                }
-            }
-            # Main panel for static info
-            $this.MainPanel = [Panel]::new()
-            $this.MainPanel.BackColor = [Color]::Transparent
-            $this.MainPanel.AutoSize = $true
-            $this.MainPanel.AutoSizeMode = [AutoSizeMode]::GrowAndShrink
-            $this.MainPanelSize = [Size]::new(800, 200)  # Initial size, will grow as needed
-            $this.MainPanel.MinimumSize = $this.MainPanelSize
-            $this.MainPanelPosition = [Point]::new(100, 50)
-            $this.MainPanel.Location = $this.MainPanelPosition
-            # Labels
-            $labelFont = [Font]::new("Arial", 24, [FontStyle]::Bold)
-            $smallFont = [Font]::new("Arial", 18, [FontStyle]::Regular)
-            $this.DateLabel = [Label]::new()
-            $this.DateLabel.Font = $labelFont
-            $this.DateLabel.ForeColor = [Color]::White
-            $this.DateLabel.AutoSize = $true
-            $this.DateLabel.Location = [Point]::new(0, 0)
-            $this.TimeLabel = [Label]::new()
-            $this.TimeLabel.Font = $labelFont
-            $this.TimeLabel.ForeColor = [Color]::White
-            $this.TimeLabel.AutoSize = $true
-            $this.TimeLabel.Location = [Point]::new(0, 50)
-            $this.LastTaskLabel = [Label]::new()
-            $this.LastTaskLabel.Font = $smallFont
-            $this.LastTaskLabel.ForeColor = [Color]::LightGreen
-            $this.LastTaskLabel.AutoSize = $true
-            $this.LastTaskLabel.Location = [Point]::new(0, 110)
-            $this.LastTaskLabel.Text = "Please wait..."
-            $this.NextTaskLabel = [Label]::new()
-            $this.NextTaskLabel.Font = $smallFont
-            $this.NextTaskLabel.ForeColor = [Color]::LightBlue
-            $this.NextTaskLabel.AutoSize = $true
-            $this.NextTaskLabel.Location = [Point]::new(0, 150)
-            $this.ExitLabel = [Label]::new()
-            $this.ExitLabel.Text = "Press Esc to exit"
-            $this.ExitLabel.Font = $smallFont
-            $this.ExitLabel.ForeColor = [Color]::Gray
-            $this.ExitLabel.AutoSize = $true
-            $this.ExitLabel.Location = [Point]::new(0, 200)
-            # Use a TextBox for word wrapping (styled as label)
-            $this.AlertTextBox = [TextBox]::new()
-            $this.AlertTextBox.Font = [Font]::new("Arial", 24, [FontStyle]::Bold)
-            $this.AlertTextBox.ForeColor = [Color]::Yellow
-            $this.AlertTextBox.BackColor = [Color]::Black
-            $this.AlertTextBox.ReadOnly = $true
-            $this.AlertTextBox.Multiline = $true
-            $this.AlertTextBox.ScrollBars = [ScrollBars]::Vertical
-            $this.AlertTextBox.Visible = $false
-            $this.AlertTextBox.Location = [Point]::new(50, 50)
-            $this.AlertTextBox.Size = [Size]::new(1200, 800)
-            $this.AlertTextBox.WordWrap = $true
-            # Add static controls
-            $this.MainPanel.Controls.Add($this.DateLabel)
-            $this.MainPanel.Controls.Add($this.TimeLabel)
-            $this.MainPanel.Controls.Add($this.LastTaskLabel)
-            $this.MainPanel.Controls.Add($this.NextTaskLabel)
-            $this.MainPanel.Controls.Add($this.ExitLabel)
-            $this.Form.Controls.Add($this.MainPanel)
-            $this.Form.Controls.Add($this.AlertTextBox)
-            # Add a clock in the top-right of the MainPanel
-            try {
-                # Slightly larger clock for better readability
-                $clockSize = 160
-                $this.ClockBox = [System.Windows.Forms.PictureBox]::new()
-                $this.ClockBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
-                # place at form upper-right so it remains visible during alerts
-                $clockX = [Math]::Max(0, $this.Form.ClientSize.Width - $clockSize - 10)
-                $this.ClockBox.Location = [System.Drawing.Point]::new($clockX, 10)
-                $this.ClockBox.SizeMode = [PictureBoxSizeMode]::Normal
-                $this.ClockBox.BackColor = [Color]::Black
-                $this.ClockBox.BorderStyle = [BorderStyle]::None
-                $this.ClockBox.Anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right
-                $this.Form.Controls.Add($this.ClockBox)
-                # Initial draw for clock
-                $this.UpdateClock([DateTime]::Now)
-                # Add an art PictureBox in the lower-left of the Form (same size as clock)
-                try {
-                    $this.ArtBox = [System.Windows.Forms.PictureBox]::new()
-                    $this.ArtBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
-                    $artY = [Math]::Max(0, $this.Form.ClientSize.Height - $clockSize - 10)
-                    $this.ArtBox.Location = [System.Drawing.Point]::new(10, $artY)
-                    $this.ArtBox.SizeMode = [PictureBoxSizeMode]::Normal
-                    $this.ArtBox.BackColor = [Color]::Black
-                    $this.ArtBox.BorderStyle = [BorderStyle]::None
-                    $this.ArtBox.Anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Left
-                    $this.Form.Controls.Add($this.ArtBox)
-                    # Initial simple draw
-                    $this.UpdateArt([DateTime]::Now)
-                }
-                catch {
-                    Write-Host "Warning: failed to create art control: $($_.Exception.Message)"
-                }
-            }
-            catch {
-                Write-Host "Warning: failed to create clock control: $($_.Exception.Message)"
-            }
-            # Ensure we attempt to mute after the form is shown (avoids early startup race
-            # where audio subsystems may not yet be ready). Retry once if it fails.
-            $this.Form.Add_Shown({ param($s, $e)
-                    $owner = $s.tag
-                    if ($owner.AutoMuteDuringSpeech) {
-                        try {
-                            if ($this.DebugMode -eq $false) {
-                                [Audio]::SetVolume(0.0)
-                            } 
-                        }
-                        catch {
-                            Write-Host "Initial mute failed on Shown; retrying: $($_.Exception.Message)"
-                            Start-Sleep -Milliseconds 200
-                            try {
-                                [Audio]::SetVolume(0.0) 
-                            }
-                            catch { 
-                                Write-Host "Retry mute failed: $($_.Exception.Message)" 
-                            }
-                        }
+                    catch {
+                        Write-Host "Warning: failed to unmute for speech: $($_.Exception.Message)"
                     }
                 })
-            # Initialize person task panels hashtable
+        
+            $this.SpeechSynth.add_SpeakCompleted({ 
+                    param($s, $e)
+                    try {
+                        if ($owner.AutoMuteDuringSpeech) {
+                            [Audio]::SetVolume(0.0)
+                            $owner.IsSpeaking = $false
+                        }
+                    }
+                    catch {
+                        Write-Host "Warning: failed to mute after speech: $($_.Exception.Message)"
+                    }
+                })
+        }
+        catch {
+            Write-Host "ERROR in InitializeSpeech: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            throw
+        }
+    }
+
+
+    [void]InitializeMainPanel() {
+        write-host "Initializing MainPanel"
+
+        $this.MainPanel = [Panel]::new()
+        $this.MainPanel.BackColor = [Color]::Transparent
+        $this.MainPanel.AutoSize = $true
+        $this.MainPanel.AutoSizeMode = [AutoSizeMode]::GrowAndShrink
+        $this.MainPanelSize = [Size]::new(800, 200)
+        $this.MainPanel.MinimumSize = $this.MainPanelSize
+        $this.MainPanelPosition = [Point]::new(100, 200)  # Moved down to make room for clock/art
+        $this.MainPanel.Location = $this.MainPanelPosition
+    }
+
+
+
+    [void]InitializeClockAndArt() {
+        write-host "Initializing Clock and Art controls"
+        try {
+            $clockSize = 160
+            $this.ClockBox = [System.Windows.Forms.PictureBox]::new()
+            $this.ClockBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
+            $this.ClockBox.Location = [System.Drawing.Point]::new(10, 10)  # Changed from right side to top-left
+            $this.ClockBox.SizeMode = [PictureBoxSizeMode]::Normal
+            $this.ClockBox.BackColor = [Color]::Black
+            $this.ClockBox.BorderStyle = [BorderStyle]::None
+            $this.ClockBox.Anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Left  # Changed anchor
+
+            $this.ArtBox = [System.Windows.Forms.PictureBox]::new()
+            $this.ArtBox.Size = [System.Drawing.Size]::new($clockSize, $clockSize)
+            $this.ArtBox.Location = [System.Drawing.Point]::new($clockSize + 20, 10)  # Position next to clock
+            $this.ArtBox.SizeMode = [PictureBoxSizeMode]::Normal
+            $this.ArtBox.BackColor = [Color]::Black
+            $this.ArtBox.BorderStyle = [BorderStyle]::None
+            $this.ArtBox.Anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Left  # Changed anchor
+        }
+        catch {
+            Write-Host "Warning: failed to create clock/art controls: $($_.Exception.Message)"
+        }
+    }
+
+    [void]InitializeComponents() {
+        write-host "Initializing components"
+        try {
+            $this.InitializeForm()
+            $this.InitializeEventHandlers()
+            $this.InitializeSpeech()
+            $this.InitializeControls()
+        
+            # Add controls to form in order: clock, art, then main panel
+            $this.Form.Controls.AddRange(@(
+                    $this.ClockBox,
+                    $this.ArtBox,
+                    $this.MainPanel,
+                    $this.AlertTextBox
+                ))
+
+            # Initialize person task panels
             $this.PersonTaskPanels = @{}
         }
         catch {
             Write-Host "ERROR in InitializeComponents: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
             throw
         }
+    }
+    [void]InitializeLabels() {
+        write-host "Initializing Labels"
+
+        $labelFont = [Font]::new("Arial", 24, [FontStyle]::Bold)
+        $smallFont = [Font]::new("Arial", 18, [FontStyle]::Regular)
+
+        # Date and Time labels at top
+        $this.DateLabel = [Label]::new()
+        $this.DateLabel.Font = $labelFont
+        $this.DateLabel.ForeColor = [Color]::White
+        $this.DateLabel.AutoSize = $true
+        $this.DateLabel.Location = [Point]::new(10, 10)
+
+        $this.TimeLabel = [Label]::new()
+        $this.TimeLabel.Font = $labelFont
+        $this.TimeLabel.ForeColor = [Color]::White
+        $this.TimeLabel.AutoSize = $true
+        $this.TimeLabel.Location = [Point]::new(10, 50)
+
+        # Task labels below time
+        $this.LastTaskLabel = [Label]::new()
+        $this.LastTaskLabel.Font = $smallFont
+        $this.LastTaskLabel.ForeColor = [Color]::Orange
+        $this.LastTaskLabel.Text = "Last: Please wait..."
+        $this.LastTaskLabel.AutoSize = $true
+        $this.LastTaskLabel.Location = [Point]::new(10, 90)
+
+        $this.NextTaskLabel = [Label]::new()
+        $this.NextTaskLabel.Font = $smallFont
+        $this.NextTaskLabel.ForeColor = [Color]::Lime
+        $this.NextTaskLabel.Text = "Next: Please wait..."
+        $this.NextTaskLabel.AutoSize = $true
+        $this.NextTaskLabel.Location = [Point]::new(10, 120)
+
+        # Exit label at bottom
+        $this.ExitLabel = [Label]::new()
+        $this.ExitLabel.Font = $smallFont
+        $this.ExitLabel.ForeColor = [Color]::Gray
+        $this.ExitLabel.Text = "Press Esc to Exit. Press I to inject tasks. Press S for story. Press Q for quotes. Press J for jokes."
+        $this.ExitLabel.AutoSize = $true
+        $this.ExitLabel.Location = [Point]::new(10, 150)
+
+        # Add labels to MainPanel
+        $this.MainPanel.Controls.AddRange(@(
+                $this.DateLabel,
+                $this.TimeLabel,
+                $this.LastTaskLabel,
+                $this.NextTaskLabel,
+                $this.ExitLabel
+            ))
     }
 
     [void]InitializeTimer() {
@@ -371,108 +386,34 @@ class SchedulerScreenSaver {
         }
     }
 
-    [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
-        $inthis.Timer.Stop()
-        function Get-Pos([string]$pos, [int]$ctrlW, [int]$ctrlH, [int]$fw, [int]$fh) {
-            switch ($pos) {
-                'UpperRight' { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = 10; $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right }
-                'LowerRight' { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = [Math]::Max(0, $fh - $ctrlH - 10); $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Right }
-                'LowerLeft' { $x = 10; $y = [Math]::Max(0, $fh - $ctrlH - 10); $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Left }
-                default { $x = [Math]::Max(0, $fw - $ctrlW - 10); $y = 10; $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right }
+    [hashtable]GetPos([string]$pos, [int]$ctrlW, [int]$ctrlH, [int]$fw, [int]$fh) {
+    
+        $x = [Math]::Max(0, $fw - $ctrlW - 10)
+        $y = 10
+        $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right 
+
+        switch ($pos) {
+            'UpperRight' { 
+                $x = [Math]::Max(0, $fw - $ctrlW - 10)
+                $y = 10
+                $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right 
             }
-            return @{ X = $x; Y = $y; Anchor = $anchor }
+            'LowerRight' { 
+                $x = [Math]::Max(0, $fw - $ctrlW - 10)
+                $y = [Math]::Max(0, $fh - $ctrlH - 10)
+                $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Right 
+            }
+            'LowerLeft' { 
+                $x = 10
+                $y = [Math]::Max(0, $fh - $ctrlH - 10)
+                $anchor = [AnchorStyles]::Bottom -bor [AnchorStyles]::Left 
+            }
+            default { 
+            }
         }
-        try {
-            $now = [DateTime]::Now
-            # Runtime schedule change detection: if schedule.csv write time changed, rebuild task_state2 and reload today's tasks
-            try {
-                $currentWrite = $null
-                if (Test-Path $this.ScheduleFile) { $currentWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc }
-                if ($currentWrite -and ($this.ScheduleFileLastWrite -eq $null -or $currentWrite -ne $this.ScheduleFileLastWrite)) {
-                    Write-Host "Detected change in $($this.ScheduleFile) (LastWriteTimeUtc changed). Rebuilding rotation map."
-                    $this.ScheduleFileLastWrite = $currentWrite
-                    try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed during runtime detection: $($_.Exception.Message)" }
-                    try { $this.LoadTodaysTasks() } catch { Write-Host "LoadTodaysTasks failed after schedule change: $($_.Exception.Message)" }
-                }
-            }
-            catch {
-                # Non-fatal; log and continue
-                Write-Host "Schedule change detection error: $($_.Exception.Message)"
-            }
-            # Update clock visual
-            # Randomize and place Clock and Art controls so they don't overlap.
-            try {
-                $positions = @('UpperRight', 'LowerRight', 'LowerLeft')
-                if ($this.ClockBox -and $this.ArtBox) {
-                    # Choose distinct positions for clock and art
-                    $clockPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)]
-                    $artPos = $clockPos  # <-- Fix: initialize to avoid "not assigned" warning
-                    do { 
-                        $artPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)] 
-                    } while ($artPos -eq $clockPos)
-                    $formW = 0; $formH = 0
-                    try { 
-                        $formW = $this.Form.ClientSize.Width
-                        $formH = $this.Form.ClientSize.Height
-                    }
-                    catch { }
-                    # Helper to compute location and anchor
-                    try {
-                        $cpos = Get-Pos $clockPos $this.ClockBox.Width $this.ClockBox.Height $formW $formH
-                        $this.ClockBox.Anchor = $cpos.Anchor
-                        $this.ClockBox.Location = [System.Drawing.Point]::new($cpos.X, $cpos.Y)
-                    }
-                    catch { }
-                    try {
-                        $apos = Get-Pos $artPos $this.ArtBox.Width $this.ArtBox.Height $formW $formH
-                        $this.ArtBox.Anchor = $apos.Anchor
-                        $this.ArtBox.Location = [System.Drawing.Point]::new($apos.X, $apos.Y)
-                    }
-                    catch { }
-                }
-            }
-            catch {
-                Write-Host "Positioning clock/art failed: $($_.Exception.Message)"
-            }
-            # Update clock visual
-            try { $this.UpdateClock($now) } catch { Write-Host "Clock update failed: $($_.Exception.Message)" }
-            # Update simple art display (circle)
-            try { $this.UpdateArt($now) } catch { Write-Host "Art update failed: $($_.Exception.Message)" }
-            # Check if we need to reload schedule (at midnight or if not loaded today)
-            if ($this.LastScheduleLoad.Date -ne $now.Date) {
-                Write-Host "New day detected - reloading schedule"
-                $this.LoadSchedule()
-            }
-            if ($this.LastTaskLabel.Text.Equals("Please wait...", [System.StringComparison]::InvariantCultureIgnoreCase)) {
-                $this.LastTaskLabel.Text = "Last: No Previous Tasks"
-            }
-            # Update time display
-            $this.DateLabel.Text = $now.ToString("dddd, MMMM dd, yyyy")
-            $this.TimeLabel.Text = $now.ToString("h:mm:ss tt")  # 'h' for 12-hour with AM/PM
-            # Handle alert timeout
-            if ($this.IsShowingAlert -and $now -ge $this.AlertEndTime) {
-                $this.AlertTextBox.Visible = $false
-                $this.IsShowingAlert = $false
-                $this.MainPanel.Visible = $true
-                # Show person panels again
-                # Restore visibility for each person panel hidden during alerts
-                foreach ($panel in $this.PersonTaskPanels.Values) {
-                    $panel.Visible = $true
-                }
-            }
-            # Check for scheduled tasks
-            $this.CheckScheduledTasks()
-            # Update person task displays
-            $this.UpdatePersonTaskDisplays()
-            # Move main panel randomly every 10 seconds
-            $this.MoveMainPanel()
-        }
-        catch {
-            Write-Host "ERROR in OnTimerTick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
-            # Do not rethrow — keep timer running
-        }
-        $inthis.Timer.Start()
+        return @{ X = $x; Y = $y; Anchor = $anchor }
     }
+
 
     [void]MoveMainPanel() {
         try {
@@ -503,6 +444,135 @@ class SchedulerScreenSaver {
             Write-Host "ERROR in MoveMainPanel: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
         }
     }
+    [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
+        Write-Host "Timer tick"
+        $inthis.Timer.Stop()
+    
+        if (-not $this.Form -or -not $this.MainPanel) {
+            Write-Host "Critical UI components not initialized"
+            $inthis.Timer.Start()
+            return
+        }
+
+        try {
+            $now = [DateTime]::Now
+            $this.CheckScheduleChanges()
+            $this.UpdateClockAndArt($now)
+            $this.UpdateTimeDisplay($now)
+            $this.HandleAlertTimeout($now)
+            $this.CheckScheduledTasks()
+            $this.UpdatePersonTaskDisplays()
+            $this.MoveMainPanel()
+        }
+        catch {
+            Write-Host "ERROR in OnTimerTick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+        }
+        $inthis.Timer.Start()
+    }
+
+    [void]CheckScheduleChanges() {
+        write-host "Checking for schedule changes"
+        try {
+            $currentWrite = $null
+            if (Test-Path $this.ScheduleFile) { 
+                $currentWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc 
+            }
+        
+            if ($currentWrite -and ($this.ScheduleFileLastWrite -eq $null -or $currentWrite -ne $this.ScheduleFileLastWrite)) {
+                Write-Host "Detected change in $($this.ScheduleFile)"
+                $this.ScheduleFileLastWrite = $currentWrite
+                try { 
+                    $this.EnsureTaskState2() 
+                }
+                catch { 
+                    Write-Host "EnsureTaskState2 failed: $($_.Exception.Message)" 
+                }
+                try { 
+                    $this.LoadTodaysTasks() 
+                }
+                catch { 
+                    Write-Host "LoadTodaysTasks failed: $($_.Exception.Message)" 
+                }
+            }
+        }
+        catch {
+            Write-Host "Schedule change detection error: $($_.Exception.Message)"
+        }
+    }
+
+    [void]UpdateClockAndArt([DateTime]$now) {
+        write-host "Updating Clock and Art positions"
+        try {
+            $positions = @('UpperRight', 'LowerRight', 'LowerLeft')
+            if ($this.ClockBox -and $this.ArtBox) {
+                $clockPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)]
+                $artPos = $clockPos
+            
+                do { 
+                    $artPos = $positions[(Get-Random -Minimum 0 -Maximum $positions.Count)] 
+                } while ($artPos -eq $clockPos)
+            
+                $formW = $this.Form.ClientSize.Width
+                $formH = $this.Form.ClientSize.Height
+
+                if ($this.ClockBox) {
+                    $cpos = $this.GetPos($clockPos, $this.ClockBox.Width, $this.ClockBox.Height, $formW, $formH)
+                    $this.ClockBox.Anchor = $cpos.Anchor
+                    $this.ClockBox.Location = [System.Drawing.Point]::new($cpos.X, $cpos.Y)
+                }
+
+                if ($this.ArtBox) {
+                    $apos = $this.GetPos($artPos, $this.ArtBox.Width, $this.ArtBox.Height, $formW, $formH)
+                    $this.ArtBox.Anchor = $apos.Anchor
+                    $this.ArtBox.Location = [System.Drawing.Point]::new($apos.X, $apos.Y)
+                }
+            }
+        
+            $this.UpdateClock($now)
+            $this.UpdateArt($now)
+        }
+        catch {
+            Write-Host "Clock/Art update failed: $($_.Exception.Message)"
+        }
+    }
+
+    [void]UpdateTimeDisplay([DateTime]$now) {
+        write-host "Updating time display"
+        try {
+            if ($this.LastScheduleLoad.Date -ne $now.Date) {
+                Write-Host "New day detected - reloading schedule"
+                $this.LoadSchedule()
+            }
+        
+            if ($this.LastTaskLabel.Text.Equals("Please wait...", [System.StringComparison]::InvariantCultureIgnoreCase)) {
+                $this.LastTaskLabel.Text = "Last: No Previous Tasks"
+            }
+
+            $this.DateLabel.Text = $now.ToString("dddd, MMMM dd, yyyy")
+            $this.TimeLabel.Text = $now.ToString("h:mm:ss tt")
+        }
+        catch {
+            Write-Host "Time display update failed: $($_.Exception.Message)"
+        }
+    }
+    [void]HandleAlertTimeout([DateTime]$now) {
+        write-host "Checking for alert timeout"
+        try {
+            if ($this.IsShowingAlert -and $now -ge $this.AlertEndTime) {
+                $this.AlertTextBox.Visible = $false
+                $this.IsShowingAlert = $false
+                $this.MainPanel.Visible = $true
+            
+                foreach ($panel in $this.PersonTaskPanels.Values) {
+                    $panel.Visible = $true
+                }
+            }
+        }
+        catch {
+            Write-Host "Alert timeout handling failed: $($_.Exception.Message)"
+        }
+    }
+
 
     [void]UpdateClock([DateTime]$time) {
         try {
@@ -694,12 +764,25 @@ class SchedulerScreenSaver {
             if (Test-Path $this.ScheduleFile) {
                 $this.Schedule = Import-Csv -Path $this.ScheduleFile
                 # Cache schedule file last write time for change detection
-                try { $this.ScheduleFileLastWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc } catch { $this.ScheduleFileLastWrite = [DateTime]::Now.ToUniversalTime() }
-                $this.LastScheduleLoad = [DateTime]::Now
+                try { 
+                    $this.ScheduleFileLastWrite = (Get-Item $this.ScheduleFile).LastWriteTimeUtc 
+                }
+                catch { 
+                    $this.ScheduleFileLastWrite = [DateTime]::Now.ToUniversalTime()
+                }
+                $this.LastScheduleLoad = [DateTime]::Now.Date
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
                 # Ensure the rotation map is present and up-to-date
-                try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed: $($_.Exception.Message)" }
+                try { 
+                    $this.EnsureTaskState2() 
+                    if ([DateTime]::Now.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
+                        $this.BuildTaskState2()
+                    } 
+                }
+                catch { 
+                    Write-Host "EnsureTaskState2 failed: $($_.Exception.Message)" 
+                }
                 $this.LoadTodaysTasks()
             }
             else {
@@ -711,9 +794,19 @@ class SchedulerScreenSaver {
                     [PSCustomObject]@{Time = "19:00"; Name = "Frank:Alice"; DaysOfWeek = "Wednesday"; Action = "family dinner"; short_title = "dinner" }
                 )
                 $sample | Export-Csv -Path $this.ScheduleFile -NoTypeInformation
+                $this.LastScheduleLoad = [DateTime]::Now.Date
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
-                try { $this.EnsureTaskState2() } catch { Write-Host "EnsureTaskState2 failed (sample): $($_.Exception.Message)" }
+                # Ensure the rotation map is present and up-to-date
+                try { 
+                    $this.EnsureTaskState2() 
+                    if ([DateTime]::Now.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
+                        $this.BuildTaskState2()
+                    } 
+                }
+                catch { 
+                    Write-Host "EnsureTaskState2 failed: $($_.Exception.Message)" 
+                }
                 $this.LoadTodaysTasks()
             }
         }
@@ -991,7 +1084,7 @@ class SchedulerScreenSaver {
             # the new collection so injected tasks remain visible immediately.
             $existing = @{}
             if ($this.TodaysTasks) {
-				write-host "Count: $($this.TodaysTasks.Keys.Count)"
+                write-host "Count: $($this.TodaysTasks.Keys.Count)"
                 foreach ($k in $this.TodaysTasks.Keys) {
                     try { $existing[$k] = $this.TodaysTasks[$k] } catch { }
                 }
@@ -1090,23 +1183,36 @@ class SchedulerScreenSaver {
     # rotation's TaskKey, an AnchorDate, and the participant Position and Name.
     # This compact representation allows computing assignments by date math for
     # arbitrarily distant dates without precomputing every calendar date.
+
     [void]BuildTaskState2() {
         try {
             Write-Host "Building compact rotation map into $($this.StateFile2)"
             $rows = @()
             $this.TaskState2 = @{}
             $anchorDate = [DateTime]::Today.ToString('yyyy-MM-dd')
+        
             # Walk each schedule row to generate compact rotation rows for rotating tasks
             foreach ($sched in $this.Schedule) {
                 try {
                     $namesRaw = $sched.Name.ToString()
-                    if ([string]::IsNullOrWhiteSpace($namesRaw)) { continue }
-                    if ($namesRaw -notmatch ':') { continue }
+                    if ([string]::IsNullOrWhiteSpace($namesRaw)) { 
+                        Write-Host "Warning: Skipping task with empty name - Action: $($sched.Action)"
+                        continue 
+                    }
+                    if ($namesRaw -notmatch ':') { 
+                        Write-Host "Info: Skipping non-rotating task - $($sched.Name): $($sched.Action)"
+                        continue 
+                    }
+                
                     $names = @($namesRaw -split ':' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                    if ($names.Count -eq 0) { continue }
+                    if ($names.Count -eq 0) { 
+                        Write-Host "Warning: No valid names found in rotation - Raw: '$namesRaw'"
+                        continue 
+                    }
+                
                     $rotationKey = "$($sched.Time.ToString().Trim())|$($sched.DaysOfWeek.ToString().Trim())|$($sched.Action.ToString().Trim())"
+                
                     # For compact representation write one line per name with a Position (+1..N)
-                    # Iterate through each participant name to write one line per participant in the compact rotation CSV
                     for ($i = 0; $i -lt $names.Count; $i++) {
                         $pos = $i + 1
                         $row = [PSCustomObject]@{
@@ -1117,25 +1223,44 @@ class SchedulerScreenSaver {
                         }
                         $rows += $row
                     }
+                
                     # keep in-memory structure
                     $this.TaskState2[$rotationKey] = @{ AnchorDate = $anchorDate; Names = $names }
                 }
                 catch {
+                    Write-Host "ERROR processing task in BuildTaskState2 - Action: '$($sched.Action)', Name: '$($sched.Name)':"
+                    Write-Host "Exception: $($_.Exception.Message)"
+                    Write-Host "Stack Trace: $($_.Exception.StackTrace)"
                     continue
                 }
             }
+        
             # Write CSV atomically
             $temp = "$($this.StateFile2).tmp"
             if ($rows.Count -gt 0) {
-                $rows | Export-Csv -Path $temp -NoTypeInformation -Force
-                try { Move-Item -Path $temp -Destination $this.StateFile2 -Force } catch { Write-Host "Warning: move failed for $($this.StateFile2): $($_.Exception.Message); writing directly"; $rows | Export-Csv -Path $this.StateFile2 -NoTypeInformation -Force }
+                try {
+                    $rows | Export-Csv -Path $temp -NoTypeInformation -Force
+                    Move-Item -Path $temp -Destination $this.StateFile2 -Force
+                }
+                catch {
+                    Write-Host "ERROR writing task state file: $($_.Exception.Message)"
+                    Write-Host "Stack Trace: $($_.Exception.StackTrace)"
+                    throw
+                }
             }
             else {
-                if (Test-Path $this.StateFile2) { Remove-Item $this.StateFile2 -ErrorAction SilentlyContinue }
+                if (Test-Path $this.StateFile2) { 
+                    try {
+                        Remove-Item $this.StateFile2 -ErrorAction SilentlyContinue 
+                    }
+                    catch {
+                        Write-Host "ERROR removing empty state file: $($_.Exception.Message)"
+                    }
+                }
             }
+        
             # Debug: write compact rotation definitions
             Write-Host "Built rotation definitions (anchor date = $anchorDate):"
-            # Debug print: iterate built rotation keys to log anchor and names
             foreach ($k in $this.TaskState2.Keys) {
                 $def = $this.TaskState2[$k]
                 Write-Host "$k => Anchor=$($def.AnchorDate) Names=($([string]::Join(',', $def.Names)))"
@@ -1143,7 +1268,9 @@ class SchedulerScreenSaver {
             Write-Host "Finished building $($this.StateFile2) with $($this.TaskState2.Count) rotation entries"
         }
         catch {
-            Write-Host "ERROR in BuildTaskState2: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            Write-Host "FATAL ERROR in BuildTaskState2: $($_.Exception.Message)"
+            Write-Host "Stack Trace: $($_.Exception.StackTrace)"
+            throw
         }
     }
 
@@ -1500,6 +1627,8 @@ class SchedulerScreenSaver {
         }
     }
 
+
+
     [void]UpdateNextTaskDisplay() {
         # UpdateNextTaskDisplay
         # Recomputes and updates the 'Last' and 'Next' labels shown in the UI.
@@ -1543,9 +1672,11 @@ class SchedulerScreenSaver {
                 $prevPerson = $previous.DisplayPerson
                 $prevAction = $previous.Task.Action
                 $this.LastTaskLabel.Text = "Last: $($prevPerson): $($prevAction)"
+                $this.LastTaskLabel.ForeColor = [Color]::Orange
             }
             else {
                 $this.LastTaskLabel.Text = "Last: No Previous Tasks"
+                $this.LastTaskLabel.ForeColor = [Color]::Gray
             }
             # Next: first task strictly after now
             $next = $todayList | Where-Object { $_.DateTime -gt $now } | Sort-Object -Property DateTime | Select-Object -First 1
@@ -1554,9 +1685,11 @@ class SchedulerScreenSaver {
                 $nextAction = $next.Task.Action
                 $displayTime = $next.DateTime.ToString("h:mm tt")
                 $this.NextTaskLabel.Text = "Next: $($nextPerson) $($nextAction) at $($displayTime)"
+                $this.NextTaskLabel.ForeColor = [Color]::Lime
             }
             else {
-                $this.NextTaskLabel.Text = "No more tasks scheduled for today"
+                $this.NextTaskLabel.Text = "Next: No more tasks scheduled for today"
+                $this.NextTaskLabel.ForeColor = [Color]::Gray
             }
         }
         catch {
@@ -1689,7 +1822,7 @@ class SchedulerScreenSaver {
                             $taskLabel.AutoSize = $true
                             $taskLabel.Location = [Point]::new(20, $yPos)
                             if ($taskEntry.DateTime -lt $now -or $taskEntry.Completed) {
-                                $taskLabel.ForeColor = [Color]::Gray
+                                $taskLabel.ForeColor = [Color]::Gray    
                             }
                             else {
                                 $taskLabel.ForeColor = [Color]::LightCyan
