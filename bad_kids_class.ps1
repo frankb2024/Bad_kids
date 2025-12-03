@@ -85,14 +85,14 @@ class SchedulerScreenSaver {
     [int]$MoveDirectionY = 1
     [bool]$IsShowingAlert = $false
     [DateTime]$AlertEndTime
-
-
+    [DateTime]$CurrentDate  # New: Current date for scheduling (can be modified for debugging)
 
     SchedulerScreenSaver([bool]$debug = $false) {
         try {
             Write-Host "Creating form (Debug Mode: $debug)"
             $this.DebugMode = $debug
-            #$this.DebugMode = $true
+            $this.CurrentDate = [DateTime]::Now.Date  # Initialize with current date
+            $this.DebugMode = $true
             # Ensure volume starts at 0
             try {
                 [Audio]::SetVolume(0.0)
@@ -111,6 +111,7 @@ class SchedulerScreenSaver {
             throw
         }
     }
+
     [void]InitializeForm() {
         try {
             Write-Host "Initializing form (Debug Mode: $($this.DebugMode))"
@@ -133,15 +134,6 @@ class SchedulerScreenSaver {
             $this.Form.BackColor = [Color]::Black
             $this.Form.KeyPreview = $true
             $this.Form.tag = $this
-        }
-        catch {
-            Write-Host "ERROR in InitializeForm: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
-            throw
-        }
-    }
-
-    [void]InitializeEventHandlers() {
-        try {
             $this.Form.Add_KeyDown({ 
                     param($s, $e) 
                     try {
@@ -149,24 +141,56 @@ class SchedulerScreenSaver {
                             $s.tag.CleanupAndExit()
                             $s.Close()
                         }
-                        # ... other key handlers
+                        elseif ($e.KeyCode -eq [Keys]::I) {
+                            # Inject a test scheduled task 30 seconds from now (frank:maria)
+                            $s.tag.InjectScheduledTaskIn30Seconds()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::D) {
+                            # Dump upcoming assignments for rotating tasks
+                            $s.tag.DumpUpcomingAssignments(10)
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::T) {
+                            # Inject a single-person task for Frank in 30 seconds
+                            $s.tag.InjectPersonTaskIn30Seconds('Frank')
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::J) {
+                            # Inject a joke-run in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('jokes')
+                        }
+                        elseif ($this.DebugMode -and $e.KeyCode -eq [Keys]::N) {
+                            $this.CurrentDate = $this.CurrentDate.AddDays(1)
+                            Write-Host "Debug: Advanced date to $($this.CurrentDate.ToString('yyyy-MM-dd'))"
+                            $this.LoadSchedule()
+                            $this.UpdatePersonTaskDisplays()
+                            $this.UpdateNextTaskDisplay()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::W) {
+                            # Inject a wisdom quote in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('quotes')
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::Q) {
+                            # Inject a story in 30 seconds
+                            $s.tag.InjectContentTaskIn30Seconds('story')
+                        }
                     }
                     catch {
                         Write-Host "KeyDown handler error: $($_.Exception.Message)"
                     }
                 })
-
+            # Add mouse click handler
             $this.Form.Add_MouseClick({
                     param($s, $e)
                     $s.tag.CleanupAndExit()
                     $s.Close()
                 })
+
         }
         catch {
-            Write-Host "ERROR in InitializeEventHandlers: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            Write-Host "ERROR in InitializeForm: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
             throw
         }
     }
+
     [void]InitializeControls() {
         write-host "Initializing controls"
         try {
@@ -189,8 +213,6 @@ class SchedulerScreenSaver {
             throw
         }
     }
-
-
 
     [void]InitializeAlertBox() {
         write-host "Initializing AlertBox"
@@ -245,7 +267,6 @@ class SchedulerScreenSaver {
         }
     }
 
-
     [void]InitializeMainPanel() {
         write-host "Initializing MainPanel"
 
@@ -258,8 +279,6 @@ class SchedulerScreenSaver {
         $this.MainPanelPosition = [Point]::new(100, 200)  # Moved down to make room for clock/art
         $this.MainPanel.Location = $this.MainPanelPosition
     }
-
-
 
     [void]InitializeClockAndArt() {
         write-host "Initializing Clock and Art controls"
@@ -290,10 +309,9 @@ class SchedulerScreenSaver {
         write-host "Initializing components"
         try {
             $this.InitializeForm()
-            $this.InitializeEventHandlers()
             $this.InitializeSpeech()
             $this.InitializeControls()
-        
+
             # Add controls to form in order: clock, art, then main panel
             $this.Form.Controls.AddRange(@(
                     $this.ClockBox,
@@ -301,7 +319,6 @@ class SchedulerScreenSaver {
                     $this.MainPanel,
                     $this.AlertTextBox
                 ))
-
             # Initialize person task panels
             $this.PersonTaskPanels = @{}
         }
@@ -310,6 +327,7 @@ class SchedulerScreenSaver {
             throw
         }
     }
+
     [void]InitializeLabels() {
         write-host "Initializing Labels"
 
@@ -349,6 +367,9 @@ class SchedulerScreenSaver {
         $this.ExitLabel.Font = $smallFont
         $this.ExitLabel.ForeColor = [Color]::Gray
         $this.ExitLabel.Text = "Press Esc to Exit. Press I to inject tasks. Press S for story. Press Q for quotes. Press J for jokes."
+        if ($this.DebugMode) {
+            $this.ExitLabel.Text += " Press N to advance debug date."
+        }
         $this.ExitLabel.AutoSize = $true
         $this.ExitLabel.Location = [Point]::new(10, 150)
 
@@ -414,7 +435,6 @@ class SchedulerScreenSaver {
         return @{ X = $x; Y = $y; Anchor = $anchor }
     }
 
-
     [void]MoveMainPanel() {
         try {
             $screen = [Screen]::PrimaryScreen.Bounds
@@ -444,6 +464,7 @@ class SchedulerScreenSaver {
             Write-Host "ERROR in MoveMainPanel: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
         }
     }
+
     [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
         Write-Host "Timer tick"
         $inthis.Timer.Stop()
@@ -455,7 +476,7 @@ class SchedulerScreenSaver {
         }
 
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $this.CheckScheduleChanges()
             $this.UpdateClockAndArt($now)
             $this.UpdateTimeDisplay($now)
@@ -555,6 +576,7 @@ class SchedulerScreenSaver {
             Write-Host "Time display update failed: $($_.Exception.Message)"
         }
     }
+
     [void]HandleAlertTimeout([DateTime]$now) {
         write-host "Checking for alert timeout"
         try {
@@ -572,7 +594,6 @@ class SchedulerScreenSaver {
             Write-Host "Alert timeout handling failed: $($_.Exception.Message)"
         }
     }
-
 
     [void]UpdateClock([DateTime]$time) {
         try {
@@ -770,13 +791,13 @@ class SchedulerScreenSaver {
                 catch { 
                     $this.ScheduleFileLastWrite = [DateTime]::Now.ToUniversalTime()
                 }
-                $this.LastScheduleLoad = [DateTime]::Now.Date
+                $this.LastScheduleLoad = $this.CurrentDate  # Use CurrentDate instead of Now
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
                 # Ensure the rotation map is present and up-to-date
                 try { 
                     $this.EnsureTaskState2() 
-                    if ([DateTime]::Now.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
+                    if ($this.CurrentDate.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
                         $this.BuildTaskState2()
                     } 
                 }
@@ -794,13 +815,13 @@ class SchedulerScreenSaver {
                     [PSCustomObject]@{Time = "19:00"; Name = "Frank:Alice"; DaysOfWeek = "Wednesday"; Action = "family dinner"; short_title = "dinner" }
                 )
                 $sample | Export-Csv -Path $this.ScheduleFile -NoTypeInformation
-                $this.LastScheduleLoad = [DateTime]::Now.Date
+                $this.LastScheduleLoad = $this.CurrentDate  # Use CurrentDate instead of Now
                 $this.LoadStoriesAndQuotes()
                 $this.LoadJokes()
                 # Ensure the rotation map is present and up-to-date
                 try { 
                     $this.EnsureTaskState2() 
-                    if ([DateTime]::Now.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
+                    if ($this.CurrentDate.TimeOfDay -lt [TimeSpan]::FromMinutes(5)) {
                         $this.BuildTaskState2()
                     } 
                 }
@@ -920,7 +941,7 @@ class SchedulerScreenSaver {
 
     [void]InjectScheduledTaskIn30Seconds() {
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             # Base due time 30 seconds from now; we'll create per-person tasks around this
             $baseDue = $now.AddSeconds(30)
             # Names list: colon-separated values; duplicate names are allowed and treated individually
@@ -993,7 +1014,7 @@ class SchedulerScreenSaver {
 
     [void]InjectPersonTaskIn30Seconds([string]$personName) {
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $due = $now.AddSeconds(30)
             $timeString = $due.ToString('HH:mm')
             $names = $personName
@@ -1034,7 +1055,7 @@ class SchedulerScreenSaver {
 
     [void]InjectContentTaskIn30Seconds([string]$contentAction) {
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $due = $now.AddSeconds(30)
             $timeString = $due.ToString('HH:mm')
             $names = ""
@@ -1077,7 +1098,7 @@ class SchedulerScreenSaver {
     [void]LoadTodaysTasks() {
         try {
             Write-Host "Loading today's tasks"
-            $now = [DateTime]::Now
+            $now = $this.CurrentDate  # Use CurrentDate instead of Now
             $currentDay = $now.DayOfWeek.ToString()
             # Preserve any existing injected task instances so they are not lost
             # when reloading the schedule at runtime. Merge existing keys into
@@ -1189,7 +1210,7 @@ class SchedulerScreenSaver {
             Write-Host "Building compact rotation map into $($this.StateFile2)"
             $rows = @()
             $this.TaskState2 = @{}
-            $anchorDate = [DateTime]::Today.ToString('yyyy-MM-dd')
+            $anchorDate = $this.CurrentDate.ToString('yyyy-MM-dd')  # Use CurrentDate instead of Today
         
             # Walk each schedule row to generate compact rotation rows for rotating tasks
             foreach ($sched in $this.Schedule) {
@@ -1339,7 +1360,7 @@ class SchedulerScreenSaver {
             Write-Host "Today's scheduled tasks (date/time -> person -> action):"
             # Ensure TaskState2 loaded so we can compute rotating assignments
             try { if (-not $this.TaskState2 -or $this.TaskState2.Count -eq 0) { $this.EnsureTaskState2() } } catch { Write-Host "Warning: EnsureTaskState2 failed: $($_.Exception.Message)" }
-            $today = [DateTime]::Today
+            $today = $this.CurrentDate  # Use CurrentDate instead of Today
             # Ensure today's tasks are loaded (this will include injected tasks)
             try { if (-not $this.TodaysTasks -or $this.TodaysTasks.Count -eq 0) { $this.LoadTodaysTasks() } } catch { Write-Host "Warning: LoadTodaysTasks failed: $($_.Exception.Message)" }
             $list = @()
@@ -1411,7 +1432,7 @@ class SchedulerScreenSaver {
                 }
             })
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             if (-not $this.TodaysTasks) {
                 Write-Host "TodaysTasks not loaded - loading now"
                 $this.LoadTodaysTasks()
@@ -1627,8 +1648,6 @@ class SchedulerScreenSaver {
         }
     }
 
-
-
     [void]UpdateNextTaskDisplay() {
         # UpdateNextTaskDisplay
         # Recomputes and updates the 'Last' and 'Next' labels shown in the UI.
@@ -1636,7 +1655,7 @@ class SchedulerScreenSaver {
         # - Picks the most recent past task as Last and the next future task as Next,
         # - Updates `$this.LastTaskLabel` and `$this.NextTaskLabel` accordingly.
         try {
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             # Build a list of today's tasks (including injected/todays entries) with DateTime and resolved person
             $todayList = @()
             # Collect today's tasks and resolve display person for each (including injected tasks)
@@ -1705,7 +1724,7 @@ class SchedulerScreenSaver {
         # This keeps the UI in sync with rotation state and today's tasks.
         try {
             # Build panels exclusively from today's task instances (TodaysTasks) so assignments match runtime state
-            $now = [DateTime]::Now
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $today = $now.Date
             # Map person -> list of task entries (each entry has DateTime, Action, short_title, Completed)
             $personMap = @{}
