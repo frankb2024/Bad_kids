@@ -39,10 +39,68 @@ automated, fair, and trustworthy scheduling of tasks and chores. Key features:
 - Enhanced Stability
   • Comprehensive try/catch blocks with detailed error context
   • Loop-level error isolation to prevent single-task failures from crashing the app
+
 The program acts as an impartial "referee" for scheduling, eliminating common
 sources of argument like "it's not fair" or "it's not my turn" by maintaining
 consistent rotation state and providing clear, timely notifications that everyone
 can trust.
+
+# HOW TO USE THIS PROGRAM
+
+## SETUP
+1. Create a CSV file named "schedule.csv" in the same directory as the script.
+   The CSV should have columns: Time, Name, DaysOfWeek, Action, short_title
+   - Time: 24-hour format (HH:MM)
+   - Name: Single person name or colon-separated list for rotating tasks (e.g., "Frank:Alice:Tom")
+   - DaysOfWeek: Days when task occurs (e.g., "Monday-Friday" or "Monday,Wednesday,Friday")
+   - Action: Description of what to do
+   - short_title: Brief description for display
+
+2. Optional: Create CSV files for content:
+   - "stories.csv" with columns: Title, Story
+   - "Daily Wisdom for Future Success.csv" with columns: Quote, Explanation
+   - "jokes.csv" with column: Joke
+
+3. Run the program by executing the main script (bad_kids.ps1).  Please do not try to run bad_kids_class.ps1 directly.
+
+## OPERATION
+- The program will display a full-screen interface showing:
+  * Current time and date
+  * Last completed task
+  * Next upcoming task
+  * Individual task panels for each person
+  * Decorative clock and kaleidoscope art.  Its hard to tell my kids to turn the wrench clockwise when clocks are a thing of the past.
+  * The volume is always kept at zero except when speaking.  This is to prevent accidental noise from the computer in the middle of the night.
+  * screensaver-like movement to prevent screen burn-in
+  * The schedule.csv allows you to keep separate schedules for weekdays and weekends. (for example allow them sleep later on weekends) 
+
+- When a task time arrives:
+  * An alert appears with the task details
+  * The task is announced via text-to-speech
+  * The task is logged to "TaskLog.csv"
+
+## KEYBOARD CONTROLS
+- Esc: Exit the program (or click on the screen)
+- J: Inject a joke in 30 seconds
+- W: Inject a wisdom quote in 30 seconds
+- Q: Inject a story in 30 seconds
+- A: Advance all rotating tasks to change kids turns.
+
+## FILE MANAGEMENT
+- schedule.csv: Main task schedule
+- task_state2.csv: Tracks rotation state for shared tasks. Delete if schedule changes.
+- TaskLog.csv: Records completed tasks
+- story_tracker.txt, quote_tracker.txt, joke_tracker.txt: Track used content
+- You will also want to update the jokes.csv, stories.csv, and Daily Wisdom for Future Success.csv files with your own content.
+
+## TROUBLESHOOTING
+- If tasks aren't appearing, check the schedule.csv format
+- If speech isn't working, verify Windows text-to-speech is enabled
+- If rotation seems wrong, delete task_state2.csv to reset
+
+## DEBUG MODE
+- In debug mode, the window is resizable and shows additional controls
+
 #>
 class SchedulerScreenSaver {
     [Form]$Form
@@ -86,13 +144,15 @@ class SchedulerScreenSaver {
     [bool]$IsShowingAlert = $false
     [DateTime]$AlertEndTime
     [DateTime]$CurrentDate  # New: Current date for scheduling (can be modified for debugging)
+    [bool]$TimerRunning = $true
 
     SchedulerScreenSaver([bool]$debug = $false) {
         try {
             Write-Host "Creating form (Debug Mode: $debug)"
             $this.DebugMode = $debug
+            #$this.DebugMode = $true
             $this.CurrentDate = [DateTime]::Now.Date  # Initialize with current date
-            $this.DebugMode = $true
+           
             # Ensure volume starts at 0
             try {
                 [Audio]::SetVolume(0.0)
@@ -136,6 +196,11 @@ class SchedulerScreenSaver {
             $this.Form.tag = $this
             $this.Form.Add_KeyDown({ 
                     param($s, $e) 
+                    $scheduler = $s.tag 
+
+                
+                    write-host "$($scheduler.DebugMode)"
+
                     try {
                         if ($e.KeyCode -eq [Keys]::Escape) { 
                             $s.tag.CleanupAndExit()
@@ -157,13 +222,28 @@ class SchedulerScreenSaver {
                             # Inject a joke-run in 30 seconds
                             $s.tag.InjectContentTaskIn30Seconds('jokes')
                         }
-                        elseif ($this.DebugMode -and $e.KeyCode -eq [Keys]::N) {
-                            $this.CurrentDate = $this.CurrentDate.AddDays(1)
-                            Write-Host "Debug: Advanced date to $($this.CurrentDate.ToString('yyyy-MM-dd'))"
-                            $this.LoadSchedule()
-                            $this.UpdatePersonTaskDisplays()
-                            $this.UpdateNextTaskDisplay()
+                        elseif ($e.KeyCode -eq [Keys]::A) {
+                            # Advance all rotating tasks by one position
+                            $s.tag.AdvanceAllRotatingTasks()
                         }
+                        elseif ($scheduler.DebugMode -and $e.KeyCode -eq [Keys]::N) {
+                            $scheduler.CurrentDate = $scheduler.CurrentDate.AddDays(1)
+                            Write-Host "Debug: Advanced date to $($scheduler.CurrentDate.ToString('yyyy-MM-dd'))"
+                            $scheduler.LoadSchedule()
+                            $scheduler.UpdatePersonTaskDisplays()
+                            $scheduler.UpdateNextTaskDisplay()
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::S) {
+                            if ($scheduler.TimerRunning) {
+                                $scheduler.Timer.Interval = 300000  # 5 minutes instead of 5 seconds
+                                Write-Host "Timer interval increased to 5 minutes for debugging"
+                            }
+                        }
+                        elseif ($e.KeyCode -eq [Keys]::R) {
+                            $scheduler.Timer.Interval = 5000  # Reset to 5 seconds
+                            Write-Host "Timer interval reset to 5 seconds"
+                        }
+
                         elseif ($e.KeyCode -eq [Keys]::W) {
                             # Inject a wisdom quote in 30 seconds
                             $s.tag.InjectContentTaskIn30Seconds('quotes')
@@ -366,7 +446,7 @@ class SchedulerScreenSaver {
         $this.ExitLabel = [Label]::new()
         $this.ExitLabel.Font = $smallFont
         $this.ExitLabel.ForeColor = [Color]::Gray
-        $this.ExitLabel.Text = "Press Esc to Exit. Press I to inject tasks. Press S for story. Press Q for quotes. Press J for jokes."
+        $this.ExitLabel.Text = "Press Esc to Exit. Press A to re-asign rotating tasks. Press S for a story. Press Q for a quote. Press J for a joke."
         if ($this.DebugMode) {
             $this.ExitLabel.Text += " Press N to advance debug date."
         }
@@ -387,28 +467,33 @@ class SchedulerScreenSaver {
         try {
             Write-Host "Initializing timer"
             $this.Timer = [Timer]::new()
-            $this.Timer.Interval = 5000  # Check every second
+            $this.Timer.Interval = 5000
             $this.Timer.tag = $this
             $this.Timer.Add_Tick({ 
                     param($sender, $e)
+                    write-host "Timer tick real event"
                     try {
-                        $sender.tag.OnTimerTick($sender.tag) 
+                        if ($sender.tag.TimerRunning) {
+                            # Check our explicit state
+                            $sender.tag.OnTimerTick() 
+                        }
                     }
                     catch {
                         Write-Host "UNHANDLED ERROR in Timer Tick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
-                        # Do not rethrow — keep timer alive
                     }
                 })
             $this.Timer.Start()
+            $this.TimerRunning = $true
         }
         catch {
             Write-Host "ERROR in InitializeTimer: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
             throw
         }
     }
-
-    [hashtable]GetPos([string]$pos, [int]$ctrlW, [int]$ctrlH, [int]$fw, [int]$fh) {
     
+    [hashtable]GetPos([string]$pos, [int]$ctrlW, [int]$ctrlH, [int]$fw, [int]$fh) {
+        # GetPos is a helper function to calculate control positions based on desired corner
+        # Inputs: desired corner (UpperRight, LowerRight, LowerLeft), control width, control height, form width, form height
         $x = [Math]::Max(0, $fw - $ctrlW - 10)
         $y = 10
         $anchor = [AnchorStyles]::Top -bor [AnchorStyles]::Right 
@@ -436,6 +521,35 @@ class SchedulerScreenSaver {
     }
 
     [void]MoveMainPanel() {
+        # MoveMainPanel
+        # This method creates the "screensaver" effect by moving the main panel around the screen.
+        # The movement is designed to prevent screen burn-in on displays that show
+        # the interface for extended periods.
+        #
+        # The movement algorithm works by:
+        #
+        # 1. Calculating random movement distances:
+        #    - X and Y movements are randomized within ranges
+        #    - Larger panels move more slowly (smaller increments)
+        #    - This ensures visibility regardless of panel size
+        #
+        # 2. Applying movement in current direction:
+        #    - Adds random distance to current position
+        #    - Maintains current direction (horizontal/vertical)
+        #
+        # 3. Detecting and handling screen edge collisions:
+        #    - If panel would go off-screen, direction is reversed
+        #    - Position is clamped to ensure panel stays fully visible
+        #    - This creates a "bouncing" effect at screen edges
+        #
+        # 4. Updating the panel position:
+        #    - New position is applied to the MainPanel control
+        #    - Position is stored for next movement calculation
+        #
+        # The movement is subtle enough to not distract from task information,
+        # but sufficient to prevent static image retention on displays.
+        #
+        # This method is called every 5 seconds by the main timer.
         try {
             $screen = [Screen]::PrimaryScreen.Bounds
             $actualPanelHeight = $this.MainPanel.Height
@@ -465,13 +579,33 @@ class SchedulerScreenSaver {
         }
     }
 
-    [void]OnTimerTick([SchedulerScreenSaver] $inthis) {
+    [void]OnTimerTick() {
+        # OnTimerTick is the main periodic update method called by the timer every 5 seconds.
+        # It performs the following key functions:  
+        # 1. Checks for schedule changes and reloads if needed
+        # 2. Updates clock and kaleidoscope art positions
+        # 3. Updates time display labels
+        # 4. Handles alert timeouts
+        # 5. Checks for scheduled tasks to trigger
+        # 6. Updates individual person task displays
+        # 7. Moves the main panel to create a screensaver effect
+        # The method is designed to be robust and handle errors gracefully.
+        # It also includes a check to ensure the timer is running before proceeding.
+       
         Write-Host "Timer tick"
-        $inthis.Timer.Stop()
+
+        if (-not $this.TimerRunning) {
+            # Add this check
+            return
+        }
     
+        #$this.Timer.Stop()
+        $this.TimerRunning = $false
+
         if (-not $this.Form -or -not $this.MainPanel) {
             Write-Host "Critical UI components not initialized"
-            $inthis.Timer.Start()
+            #$this.TimerRunning = $true
+            #this.Timer.Start()            
             return
         }
 
@@ -488,10 +622,27 @@ class SchedulerScreenSaver {
         catch {
             Write-Host "ERROR in OnTimerTick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
         }
-        $inthis.Timer.Start()
+        $this.TimerRunning = $true
+        #$this.Timer.Start()
     }
 
     [void]CheckScheduleChanges() {
+        # CheckScheduleChanges is a method that checks for changes in the schedule file and reloads tasks if needed.
+        # It performs the following steps:
+        # 1. Retrieves the current write time of the schedule file.
+        # 2. Compares the current write time with the last known write time.
+        # 3. If a change is detected, it updates the last known write time and ensures the task state.
+        # 4. It then loads the tasks for the current day.
+        # The method is designed to be robust and handle errors gracefully.
+
+        # CheckScheduleChanges is a method that checks for changes in the schedule file and reloads tasks if needed.
+        # It performs the following steps:
+        # 1. Retrieves the current write time of the schedule file.
+        # 2. Compares the current write time with the last known write time.
+        # 3. If a change is detected, it updates the last known write time and ensures the task state.
+        # 4. It then loads the tasks for the current day.
+        # The method is designed to be robust and handle errors gracefully.
+
         write-host "Checking for schedule changes"
         try {
             $currentWrite = $null
@@ -522,6 +673,13 @@ class SchedulerScreenSaver {
     }
 
     [void]UpdateClockAndArt([DateTime]$now) {
+
+        # UpdateClockAndArt updates the positions of the clock and kaleidoscope art on the form.
+        # It randomly selects positions for each control from predefined corners of the screen,
+        # ensuring they do not overlap. It then updates the controls' locations and anchors
+        # accordingly. Finally, it calls methods to update the clock and art displays based on the
+        # current time.
+
         write-host "Updating Clock and Art positions"
         try {
             $positions = @('UpperRight', 'LowerRight', 'LowerLeft')
@@ -557,7 +715,99 @@ class SchedulerScreenSaver {
         }
     }
 
+    [void]SaveTaskState2() {
+        # SaveTaskState2 saves the current task rotation state to a CSV file.
+        # It writes the task key, anchor date, position, name, and whether the task is rotating.
+        # The CSV file is saved to a temporary file, then moved to the final location to ensure atomicity.
+        # If an error occurs during the process, it writes an error message and rethrows the exception.
+        # The method is designed to be robust and handle errors gracefully.
+
+        write-host "Saving TaskState2 to $($this.StateFile2)"
+        
+        try {
+            $rows = @()
+            foreach ($rotationKey in $this.TaskState2.Keys) {
+                $def = $this.TaskState2[$rotationKey]
+                for ($i = 0; $i -lt $def.Names.Count; $i++) {
+                    $row = [PSCustomObject]@{
+                        TaskKey    = $rotationKey
+                        AnchorDate = $def.AnchorDate
+                        Position   = $i + 1
+                        Name       = $def.Names[$i]
+                        IsRotating = $def.IsRotating
+                    }
+                    $rows += $row
+                }
+            }
+        
+            $temp = "$($this.StateFile2).tmp"
+            $rows | Export-Csv -Path $temp -NoTypeInformation -Force
+            Move-Item -Path $temp -Destination $this.StateFile2 -Force
+        }
+        catch {
+            Write-Host "ERROR in SaveTaskState2: $($_.Exception.Message)"
+            throw
+        }
+    }
+
+    [void]AdvanceAllRotatingTasks() {
+        # AdvanceAllRotatingTasks advances all rotating tasks by one position.
+        # It updates the anchor date for each rotating task to the previous valid day
+
+        try {
+            Write-Host "Advancing all rotating tasks by one position"
+            #if computer says that today is John's turn, but you need it to be Mary's turn instead,
+            #this function will move it back one occurrence so that Mary is now up next.
+            $newState = @{ }
+            foreach ($rotationKey in $this.TaskState2.Keys) {
+                $def = $this.TaskState2[$rotationKey]
+                if ($def.IsRotating) {
+                    # Move anchor date back by one occurrence
+                    $parts = $rotationKey -split '\|'
+                    $daysPart = if ($parts.Count -ge 2) { $parts[1] } else { 'Sunday-Saturday' }
+                
+                    # Find previous valid day based on DaysOfWeek
+                    $anchor = [DateTime]::ParseExact($def.AnchorDate, 'yyyy-MM-dd', $null)
+                    $prevDay = $anchor.AddDays(-1)
+                    while (-not $this.IsDayInRange($prevDay.DayOfWeek.ToString(), $daysPart)) {
+                        $prevDay = $prevDay.AddDays(-1)
+                    }
+                
+                    # Update with new anchor date
+                    $newState[$rotationKey] = @{
+                        AnchorDate = $prevDay.ToString('yyyy-MM-dd')
+                        Names      = $def.Names
+                        IsRotating = $true
+                    }
+                }
+                else {
+                    $newState[$rotationKey] = $def
+                }
+            }
+        
+            # Update state and save
+            $this.TaskState2 = $newState
+            $this.SaveTaskState2()
+        
+            # Reload today's tasks to pick up changes
+            $this.LoadTodaysTasks()
+            $this.UpdatePersonTaskDisplays()
+            $this.UpdateNextTaskDisplay()
+        
+            Write-Host "Successfully advanced all rotating tasks"
+        }
+        catch {
+            Write-Host "ERROR in AdvanceAllRotatingTasks: $($_.Exception.Message)"
+        }
+    }
+
     [void]UpdateTimeDisplay([DateTime]$now) {
+        # UpdateTimeDisplay updates the date and time labels on the form.
+        # It checks if the day has changed since the last schedule load and reloads the schedule if needed.
+        # It also updates the date and time labels with the current date and time.
+        # If an error occurs during the process, it writes an error message and continues.
+
+        write-host "Updating time display"
         write-host "Updating time display"
         try {
             if ($this.LastScheduleLoad.Date -ne $now.Date) {
@@ -578,6 +828,11 @@ class SchedulerScreenSaver {
     }
 
     [void]HandleAlertTimeout([DateTime]$now) {
+        # HandleAlertTimeout checks if an alert is currently being shown and if its timeout has been reached.
+        # If the alert timeout has been reached, it hides the alert and restores the main panel
+        # and task panels to their original visibility states.
+        # If an error occurs during the process, it writes an error message and continues.
+
         write-host "Checking for alert timeout"
         try {
             if ($this.IsShowingAlert -and $now -ge $this.AlertEndTime) {
@@ -596,6 +851,30 @@ class SchedulerScreenSaver {
     }
 
     [void]UpdateClock([DateTime]$time) {
+        # UpdateClock
+        # This method creates a custom analog clock display that updates every timer tick.
+        # The clock is drawn programmatically using System.Drawing graphics rather than
+        # using a pre-made image, allowing for dynamic updates and custom styling.
+        #
+        # The clock features:
+        # - Hour, minute, and second hands
+        # - Hour markers (12 positions) and half-hour markers
+        # - Numeric hour labels (1-12)
+        # - Center pivot point
+        # - Color-coded hands (gray for hours, white for minutes, red for seconds)
+        #
+        # Drawing process:
+        # 1. Create a bitmap with the clock dimensions
+        # 2. Draw outer circle and hour markers
+        # 3. Draw half-hour markers between hour markers
+        # 4. Draw numeric labels (1-12) around the clock face
+        # 5. Calculate hand angles based on current time
+        # 6. Draw hour, minute, and second hands
+        # 7. Add center pivot point
+        # 8. Safely replace the previous clock image
+        #
+        # The clock positioning is handled by UpdateClockAndArt(), which moves
+        # the clock to different corners of the screen to prevent burn-in.
         try {
             if (-not $this.ClockBox) { return }
             $w = $this.ClockBox.Width
@@ -695,6 +974,32 @@ class SchedulerScreenSaver {
     }
 
     [void]UpdateArt([DateTime]$time) {
+        # UpdateArt
+        # This method creates a dynamic kaleidoscope pattern that changes with time.
+        # The art is generated programmatically using mathematical patterns and randomness,
+        # creating an ever-changing visual display that prevents screen burn-in.
+        #
+        # The kaleidoscope algorithm works by:
+        #
+        # 1. Creating a circular canvas with a black background
+        # 2. Defining a color palette with semi-transparent colors
+        # 3. Randomly determining the number of sectors (6-12)
+        # 4. Generating random shapes (ellipses) in one sector:
+        #    - Random position, size, and color from palette
+        #    - Each shape is drawn multiple times across sectors
+        # 5. Mirroring shapes across all sectors:
+        #    - Alternating sectors are mirrored horizontally
+        #    - Creates the classic kaleidoscope symmetry
+        # 6. Adding concentric rings for structure
+        # 7. Safely replacing the previous art image
+        #
+        # The art positioning is handled by UpdateClockAndArt(), which moves
+        # the art to different corners of the screen to prevent burn-in.
+        #
+        # The randomness is seeded with time components to ensure:
+        # - The pattern changes noticeably over time
+        # - Different patterns appear on different days
+        # - The same time always produces the same pattern (deterministic)
         try {
             if (-not $this.ArtBox) { return }
             $w = [Math]::Max(32, $this.ArtBox.Width)
@@ -780,8 +1085,23 @@ class SchedulerScreenSaver {
     }
 
     [void]LoadSchedule() {
+        # LoadSchedule loads the schedule from the CSV file.
+        # It performs the following steps:
+        # 1. Clears existing tasks
+        # 2. Checks if the schedule file exists
+        # 3. If it exists, imports the schedule and caches the last write time
+        # 4. Loads stories, quotes, and jokes
+        # 5. Ensures the task state is present and up-to-date
+        # 6. Loads today's tasks
+        # 7. If the schedule file does not exist, creates a sample schedule file
+
+
         try {
             Write-Host "Loading schedule from $($this.ScheduleFile)"
+
+            # At the start of LoadSchedule(), before loading new tasks:
+            $this.TodaysTasks = @{}  # Clear existing tasks
+
             if (Test-Path $this.ScheduleFile) {
                 $this.Schedule = Import-Csv -Path $this.ScheduleFile
                 # Cache schedule file last write time for change detection
@@ -838,6 +1158,12 @@ class SchedulerScreenSaver {
     }
 
     [void]LoadStoriesAndQuotes() {
+        # LoadStoriesAndQuotes loads stories and quotes from their respective CSV files.
+        # It performs the following steps:
+        # 1. Checks if the stories and quotes files exist
+        # 2. If they exist, imports the data into the Stories and Quotes properties
+        # 3. If they do not exist, initializes the properties as empty arrays
+
         try {
             # Load stories
             if (Test-Path $this.StoriesFile) {
@@ -864,6 +1190,12 @@ class SchedulerScreenSaver {
     }
 
     [void]LoadJokes() {
+        # LoadJokes loads jokes from the jokes CSV file.
+        # It performs the following steps:
+        # 1. Checks if the jokes file exists
+        # 2. If it exists, imports the data into the Jokes property
+        # 3. If it does not exist, initializes the property as an empty array
+
         try {
             if (Test-Path $this.JokesFile) {
                 $this.Jokes = @(Import-Csv -Path $this.JokesFile)
@@ -880,6 +1212,9 @@ class SchedulerScreenSaver {
     }
 
     [array]GetUnusedIndices([array]$items, [string]$trackerFile) {
+        # GetUnusedIndices returns an array of unused indices from the provided items array.
+        # It reads the used indices from the specified tracker file and determines which indices are not used.
+
         try {
             if ($items.Count -eq 0) { return @() }
             $used = @()
@@ -901,6 +1236,9 @@ class SchedulerScreenSaver {
     }
 
     [array]GetUnusedJokeIndices() {
+        # GetUnusedJokeIndices returns an array of unused joke indices.
+        # It reads the used joke indices from the JokeTrackerFile and determines which indices are not used.
+
         try {
             if ($this.Jokes.Count -eq 0) { return @() }
             $used = @()
@@ -922,6 +1260,12 @@ class SchedulerScreenSaver {
     }
 
     [void]RecordUsedIndex([int]$index, [string]$trackerFile) {
+        # RecordUsedIndex records a used index by appending it to the specified tracker file.
+        # It handles any errors that may occur during the file operation.
+        # The function takes two parameters:
+        #   $index: the index to record
+        #   $trackerFile: the path to the tracker file
+
         try {
             Add-Content -Path $trackerFile -Value "$index"
         }
@@ -931,6 +1275,10 @@ class SchedulerScreenSaver {
     }
 
     [void]RecordUsedJokeIndex([int]$index) {
+        # RecordUsedJokeIndex records a used joke index by appending it to the JokeTrackerFile.
+        # It handles any errors that may occur during the file operation.
+
+
         try {
             Add-Content -Path $this.JokeTrackerFile -Value "$index"
         }
@@ -940,6 +1288,13 @@ class SchedulerScreenSaver {
     }
 
     [void]InjectScheduledTaskIn30Seconds() {
+        # InjectScheduledTaskIn30Seconds injects multiple scheduled tasks due in 30 seconds for debugging purposes. It performs the following steps:
+        # 1. Gets the current date and time.
+        # 2. Sets the base due time to 30 seconds from now.
+        # 3. Defines a list of names, days of the week, action, and short title.
+        # 4. Splits the names list into an array of names.
+
+
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             # Base due time 30 seconds from now; we'll create per-person tasks around this
@@ -1013,6 +1368,7 @@ class SchedulerScreenSaver {
     }
 
     [void]InjectPersonTaskIn30Seconds([string]$personName) {
+        # Inject a single-person task due in 30 seconds for debugging purposes
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $due = $now.AddSeconds(30)
@@ -1054,6 +1410,7 @@ class SchedulerScreenSaver {
     }
 
     [void]InjectContentTaskIn30Seconds([string]$contentAction) {
+        # Inject a content task (joke, story, quote) due in 30 seconds for debugging purposes
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             $due = $now.AddSeconds(30)
@@ -1096,6 +1453,20 @@ class SchedulerScreenSaver {
     }
 
     [void]LoadTodaysTasks() {
+        # LoadTodaysTasks builds the list of tasks scheduled for today.
+        # This method is called by the constructor and by InjectScheduledTaskIn30Seconds
+        # to refresh the UI after a task is injected. It performs the following steps:
+        # 1. Gets the current day of the week.
+        # 2. Iterates through each scheduled task in the Schedule property.
+        # 3. Checks if the current day is within the range specified by the DaysOfWeek property of the task.
+        # 4. Parses the time of the task and creates a DateTime object for the task's due time.
+        # 5. Constructs a unique key for the task using the task's time, name, and action.
+        # 6. Adds the task to the TodaysTasks property of the object, using the key as the index.
+        # 7. If the task has a task_state2 property, it attempts to determine the assigned person for the task.
+        # 8. If the task is successfully added to the TodaysTasks property, it logs a message indicating the task was injected.
+        # 9. If there is an error during the process, it logs an error message.
+
+
         try {
             Write-Host "Loading today's tasks"
             $now = $this.CurrentDate  # Use CurrentDate instead of Now
@@ -1132,12 +1503,14 @@ class SchedulerScreenSaver {
                         # instance with the same key does not already exist. This
                         # prevents LoadTodaysTasks from overwriting manual injections.
                         if (-not $this.TodaysTasks.ContainsKey($taskKey)) {
+                            # When creating task entries, add rotation flag:
                             $this.TodaysTasks[$taskKey] = @{
                                 Task           = $task
                                 DateTime       = $taskDateTime
                                 Completed      = $false
                                 Called         = $false
                                 AssignedPerson = $assigned
+                                IsRotating     = ($task.Name -match ':')  # Track if this is a rotating task
                             }
                         }
                     }
@@ -1155,6 +1528,16 @@ class SchedulerScreenSaver {
     }
 
     [void]EnsureTaskState2() {
+        # EnsureTaskState2 ensures that the compact rotation map (task_state2.csv) is present and up-to-date.
+        # It performs the following steps:
+        # 1. Checks if the task_state2.csv file exists.
+        # 2. If the file does not exist, it logs a message indicating that the file is missing.
+        # 3. If the file exists, it checks if the file has been modified since the last cached time.
+        # 4. If the file has been modified or is missing, it rebuilds the task_state2.csv file by calling the BuildTaskState2 method.
+        # 5. If the file is not modified, it loads the existing task_state2.csv file into memory as grouped rotation definitions.
+        # 6. It logs the number of rotation definitions loaded from the task_state2.csv file.
+        # 7. If there is an error during the process, it logs an error message.
+
         try {
             # If schedule file changed since last cached time, or task_state2 missing, rebuild
             $needRebuild = $false
@@ -1198,20 +1581,43 @@ class SchedulerScreenSaver {
         }
     }
 
-    # BuildTaskState2
-    # Builds a compact rotation map (`task_state2.csv`) describing rotating tasks.
-    # The CSV contains one row per participant per rotating task, recording the
-    # rotation's TaskKey, an AnchorDate, and the participant Position and Name.
-    # This compact representation allows computing assignments by date math for
-    # arbitrarily distant dates without precomputing every calendar date.
-
+  
     [void]BuildTaskState2() {
+        # BuildTaskState2
+        # This method creates a compact rotation map (`task_state2.csv`) that describes all rotating tasks.
+        # It's called when the program starts or when the schedule file changes.
+        #
+        # The rotation map is a CSV file containing one row per participant per rotating task.
+        # Each row records:
+        # - TaskKey: A unique identifier (Time|DaysOfWeek|Action)
+        # - AnchorDate: The starting date for the rotation
+        # - Position: The person's position in the rotation (1-based)
+        # - Name: The person's name
+        # - IsRotating: Flag indicating this is a rotating task
+        #
+        # This compact representation is highly efficient because:
+        # 1. It doesn't require storing the full rotation history
+        # 2. It allows computing assignments for any date using simple date math
+        # 3. It's resilient to program restarts and schedule changes
+        #
+        # For example, for a shower task shared by "Frank:Alice:Tom" at 8:00 PM on weekdays:
+        # The CSV would contain:
+        # TaskKey,AnchorDate,Position,Name,IsRotating
+        # "20:00|Monday-Friday|shower","2023-01-01",1,"Frank",True
+        # "20:00|Monday-Friday|shower","2023-01-01",2,"Alice",True
+        # "20:00|Monday-Friday|shower","2023-01-01",3,"Tom",True
+        #
+        # When GetAssignedPersonForDate() needs to determine who showers on a specific date,
+        # it counts weekdays between the anchor date and target date, then uses modulo arithmetic
+        # to determine which position in the rotation is current.
+
+
         try {
             Write-Host "Building compact rotation map into $($this.StateFile2)"
             $rows = @()
-            $this.TaskState2 = @{}
+            $this.TaskState2 = @{ }
             $anchorDate = $this.CurrentDate.ToString('yyyy-MM-dd')  # Use CurrentDate instead of Today
-        
+
             # Walk each schedule row to generate compact rotation rows for rotating tasks
             foreach ($sched in $this.Schedule) {
                 try {
@@ -1220,19 +1626,23 @@ class SchedulerScreenSaver {
                         Write-Host "Warning: Skipping task with empty name - Action: $($sched.Action)"
                         continue 
                     }
-                    if ($namesRaw -notmatch ':') { 
+
+                    # Check if this is a rotating task by looking for colon separator
+                    $isRotating = $namesRaw -match ':'
+                
+                    if (-not $isRotating) { 
                         Write-Host "Info: Skipping non-rotating task - $($sched.Name): $($sched.Action)"
                         continue 
                     }
-                
+
                     $names = @($namesRaw -split ':' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                     if ($names.Count -eq 0) { 
                         Write-Host "Warning: No valid names found in rotation - Raw: '$namesRaw'"
                         continue 
                     }
-                
+
                     $rotationKey = "$($sched.Time.ToString().Trim())|$($sched.DaysOfWeek.ToString().Trim())|$($sched.Action.ToString().Trim())"
-                
+
                     # For compact representation write one line per name with a Position (+1..N)
                     for ($i = 0; $i -lt $names.Count; $i++) {
                         $pos = $i + 1
@@ -1241,12 +1651,17 @@ class SchedulerScreenSaver {
                             AnchorDate = $anchorDate
                             Position   = $pos
                             Name       = $names[$i]
+                            IsRotating = $true  # Explicitly mark as rotating
                         }
                         $rows += $row
                     }
-                
-                    # keep in-memory structure
-                    $this.TaskState2[$rotationKey] = @{ AnchorDate = $anchorDate; Names = $names }
+
+                    # Keep in-memory structure with rotation flag
+                    $this.TaskState2[$rotationKey] = @{ 
+                        AnchorDate = $anchorDate 
+                        Names      = $names
+                        IsRotating = $true  # Track rotation state
+                    }
                 }
                 catch {
                     Write-Host "ERROR processing task in BuildTaskState2 - Action: '$($sched.Action)', Name: '$($sched.Name)':"
@@ -1255,7 +1670,7 @@ class SchedulerScreenSaver {
                     continue
                 }
             }
-        
+
             # Write CSV atomically
             $temp = "$($this.StateFile2).tmp"
             if ($rows.Count -gt 0) {
@@ -1279,12 +1694,12 @@ class SchedulerScreenSaver {
                     }
                 }
             }
-        
+
             # Debug: write compact rotation definitions
             Write-Host "Built rotation definitions (anchor date = $anchorDate):"
             foreach ($k in $this.TaskState2.Keys) {
                 $def = $this.TaskState2[$k]
-                Write-Host "$k => Anchor=$($def.AnchorDate) Names=($([string]::Join(',', $def.Names)))"
+                Write-Host "$k => Anchor=$($def.AnchorDate) Names=($([string]::Join(',', $def.Names))) Rotating=$($def.IsRotating)"
             }
             Write-Host "Finished building $($this.StateFile2) with $($this.TaskState2.Count) rotation entries"
         }
@@ -1295,17 +1710,32 @@ class SchedulerScreenSaver {
         }
     }
 
-    # GetAssignedPersonForDate
-    # Given a compact rotation definition key (Time|DaysOfWeek|Action) and a
-    # target date, compute which participant is assigned on that date by:
-    #  - reading the rotation's AnchorDate and ordered Names from `$this.TaskState2`
-    #  - counting occurrences of the scheduled day(s) between anchor and target
-    #  - applying modular arithmetic to select the name by offset
-    # Parameters:
-    #  - $rotationKey: canonical rotation identifier (Time|DaysOfWeek|Action)
-    #  - $targetDate: DateTime for which to compute the assigned person
-    # Returns: string assigned person's name, or $null if not defined
+
     [string]GetAssignedPersonForDate([string]$rotationKey, [DateTime]$targetDate) {
+
+        # GetAssignedPersonForDate
+        # This is the core rotation algorithm that determines which person is assigned to a rotating task on any given date.
+        # 
+        # The algorithm works by:
+        # 1. Using a compact rotation definition key (Time|DaysOfWeek|Action) to identify the task
+        # 2. Reading the rotation's AnchorDate (when rotation started) and ordered Names from `$this.TaskState2`
+        # 3. Counting how many times this task would have occurred between the anchor date and target date
+        # 4. Using modular arithmetic to select the appropriate person based on the count
+        #
+        # For example, if "Frank:Alice:Tom" share a shower task:
+        # - Anchor date: 2023-01-01 (Frank)
+        # - Target date: 2023-01-08 (one week later)
+        # - If task occurs daily, there are 7 occurrences between dates
+        # - 7 % 3 = 1, so Alice (position 1) is assigned
+        #
+        # This approach allows us to compute assignments for any date without storing
+        # the full rotation history, making it efficient and scalable.
+        #
+        # Parameters:
+        #  - $rotationKey: canonical rotation identifier (Time|DaysOfWeek|Action)
+        #  - $targetDate: DateTime for which to compute the assigned person
+        # Returns: string assigned person's name, or $null if not defined
+
         try {
             if (-not $this.TaskState2.ContainsKey($rotationKey)) { return $null }
             $def = $this.TaskState2[$rotationKey]
@@ -1412,14 +1842,33 @@ class SchedulerScreenSaver {
             Write-Host "ERROR in DumpUpcomingAssignments: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
         }
     }
-
     [void]CheckScheduledTasks() {
         # CheckScheduledTasks
-        # Iterates over `$this.TodaysTasks` and determines if any task is due.
-        # For content tasks (story/quotes/jokes) it selects a non-repeating entry,
-        # speaks and displays alerts, logs to `$this.LogFile`, and marks tasks called/completed.
-        # For rotating person tasks it computes assignment using the date-based anchor method.
-        # This method is the runtime executor for scheduled items.
+        # This is the core method that monitors and executes scheduled tasks.
+        # It's called every 5 seconds by the main timer and performs these key functions:
+        #
+        # 1. Mark expired tasks as completed (tasks more than 1 hour past their time)
+        # 2. Check active tasks to see if any are due (within 20 seconds of current time)
+        # 3. For due tasks:
+        #    - Display visual alert
+        #    - Speak task announcement
+        #    - Log task completion
+        #    - Mark task as called/completed
+        #
+        # Special handling for content tasks (stories, quotes, jokes):
+        # - Selects unused content from respective CSV files
+        # - Updates tracker files to prevent repeats
+        # - Resets tracker when all content has been used
+        #
+        # For rotating tasks (multiple names separated by colons):
+        # - Determines assigned person using GetAssignedPersonForDate
+        # - Uses rotation state from task_state2.csv
+        #
+        # The method is optimized to:
+        # - Only process active (not completed) tasks
+        # - Stop checking after finding first due task
+        # - Handle errors gracefully without crashing
+        #
         write-Host "Checking scheduled tasks..."
         $helloTimer = [System.Windows.Forms.Timer]::new()
         $helloTimer.Add_Tick({ param($s, $ev)
@@ -1438,28 +1887,48 @@ class SchedulerScreenSaver {
                 $this.LoadTodaysTasks()
             }
             Write-Host "Count $($this.TodaysTasks.Count)"
-            # Iterate today's tasks to check each task for due/executing state
+    
+            # First pass: mark expired tasks as completed
             foreach ($taskKey in $this.TodaysTasks.Keys) {
                 try {
                     $taskInfo = $this.TodaysTasks[$taskKey]
-                    if ($taskInfo.Completed -or $taskInfo.Called) {
-                        continue
+                    if (-not $taskInfo.Completed -and -not $taskInfo.Called) {
+                        $timeDiff = ($now - $taskInfo.DateTime).TotalMinutes
+                        if ($timeDiff > 60) {
+                            # More than 1 hour past
+                            $this.TodaysTasks[$taskKey].Completed = $true
+                            Write-Host "Task expired and marked passed: $taskKey"
+                        }
                     }
+                }
+                catch {
+                    Write-Host "ERROR checking task expiration for '$($taskKey)': $($_.Exception.Message)"
+                    continue
+                }
+            }
+
+            # Second pass: only check active tasks
+            $activeTasks = $this.TodaysTasks.GetEnumerator() | Where-Object {
+                -not $_.Value.Completed -and -not $_.Value.Called
+            }
+
+            foreach ($task in $activeTasks) {
+                try {
+                    $taskInfo = $task.Value
+                    $taskKey = $task.Key
                     $task = $taskInfo.Task
                     $taskDateTime = $taskInfo.DateTime
                     $timeDiffSeconds = ($now - $taskDateTime).TotalSeconds
+            
                     if ($this.DebugMode) {
                         Write-Host "Checking task '$($task.Action)' $($task.Name) at $($task.Time), diff: $timeDiffSeconds seconds"
                     }
-                    if ($timeDiffSeconds -gt 20) {
-                        Write-Host "Task expired, marking completed: $taskKey"
-                        $this.TodaysTasks[$taskKey].Completed = $true
-                        continue
-                    }
+
                     if ([Math]::Abs($timeDiffSeconds) -le 20) {
                         $personForLog = "Unknown"
                         $alertMessage = ""
                         $speechText = ""
+                
                         # Special handling for "story", "quotes", or "jokes" actions
                         if ($task.Action -eq "story") {
                             $unused = $this.GetUnusedIndices($this.Stories, $this.StoryTrackerFile)
@@ -1528,6 +1997,7 @@ class SchedulerScreenSaver {
                             $speechText = "It is $($now.ToString("h:mm tt")). $alertMessage"
                             $personForLog = $person
                         }
+
                         # Log task
                         $logEntry = [PSCustomObject]@{
                             Date           = $now.ToString("yyyy-MM-dd")
@@ -1539,8 +2009,8 @@ class SchedulerScreenSaver {
                             Action         = $task.Action
                         }
                         $logEntry | Export-Csv -Path $this.LogFile -Append -NoTypeInformation
-                        # Record the actual assigned person for this task instance so UI and
-                        # any subsequent display logic can show who was called for this run.
+
+                        # Record the actual assigned person for this task instance
                         try {
                             if ($this.TodaysTasks.ContainsKey($taskKey)) {
                                 $this.TodaysTasks[$taskKey].AssignedPerson = $personForLog
@@ -1549,15 +2019,18 @@ class SchedulerScreenSaver {
                         catch {
                             Write-Host "Warning: failed to set AssignedPerson for key $($taskKey): $($_.Exception.Message)"
                         }
+
                         # Update UI
                         $this.LastTaskLabel.Text = "Last: $($task.Action) at $($task.Time)"
                         $this.UpdateNextTaskDisplay()
+
                         # Show alert
                         $this.AlertTextBox.Text = $alertMessage
                         $this.AlertTextBox.Visible = $true
                         $this.IsShowingAlert = $true
                         $this.AlertEndTime = $now.AddSeconds(20)
                         $this.MainPanel.Visible = $false
+
                         # Speak alert
                         Write-Host "Speaking: $speechText"
                         try {
@@ -1565,9 +2038,12 @@ class SchedulerScreenSaver {
                             $this.SpeechSynth.Speak($speechText)
                             # Start a one-off UI timer that waits 60 seconds and then writes "hello" to the screen
                             try {
-                                $helloTimer.Interval = 60000  # 60 seconds
-                                $helloTimer.Tag = $this
-                                $helloTimer.Start()
+                                if ($this.TimerRunning) {
+                                    # Check main timer state before starting hello timer
+                                    $helloTimer.Interval = 60000  # 60 seconds
+                                    $helloTimer.Tag = $this
+                                    $helloTimer.Start()
+                                }
                             }
                             catch {
                                 Write-Host "Failed to start hello timer: $($_.Exception.Message)"
@@ -1576,6 +2052,7 @@ class SchedulerScreenSaver {
                         catch {
                             Write-Host "Error during speech/volume control: $($_.Exception.Message)"
                         }
+
                         # Mark as called/completed
                         $this.TodaysTasks[$taskKey].Called = $true
                         $this.TodaysTasks[$taskKey].Completed = $true
@@ -1583,14 +2060,11 @@ class SchedulerScreenSaver {
                     }
                 }
                 catch {
-                    Write-Host "ERROR processing task key '$($taskKey)' "
-                    #Write-Host "Action: '$($task.Action)"
-                    #Write-Host "Person: '$($task.Name)': "
-                    Write-Host "$($_.Exception.Message)"
-                    Write-Host "$($_.Exception.StackTrace)"
+                    Write-Host "ERROR processing task key '$($taskKey)': $($_.Exception.Message)"
                     continue
                 }
             }
+
             if (-not $this.IsShowingAlert) {
                 $this.UpdateNextTaskDisplay()
             }
@@ -1600,15 +2074,35 @@ class SchedulerScreenSaver {
         }
     }
 
+   
     [bool]IsDayInRange([string]$currentDay, [string]$range) {
         # IsDayInRange
-        # Returns true if `$currentDay` (e.g., 'Monday') is included in `$range`.
-        # Supported range formats:
-        #  - 'Sunday-Saturday' | 'All' | '*' => all days
-        #  - Comma-separated list: 'Monday,Wednesday,Friday'
-        #  - Range: 'Monday-Friday'
-        #  - Single day name: 'Tuesday'
-        # This helper centralizes day-range parsing used throughout the scheduler.
+        # This method determines if a specific day of the week falls within a specified range.
+        # It's used throughout the scheduler to decide if a task should be scheduled for today.
+        #
+        # The method supports multiple range formats for flexibility:
+        #
+        # 1. Full week: 'Sunday-Saturday', 'All', or '*'
+        #    - Returns true for any day
+        #    - Example: IsDayInRange('Wednesday', 'All') returns true
+        #
+        # 2. Comma-separated list: 'Monday,Wednesday,Friday'
+        #    - Returns true only for explicitly listed days
+        #    - Example: IsDayInRange('Tuesday', 'Monday,Wednesday,Friday') returns false
+        #
+        # 3. Range: 'Monday-Friday'
+        #    - Returns true for days within the inclusive range
+        #    - Handles wrap-around ranges (e.g., 'Friday-Monday')
+        #    - Example: IsDayInRange('Thursday', 'Monday-Friday') returns true
+        #
+        # 4. Single day name: 'Tuesday'
+        #    - Returns true only for that exact day
+        #    - Example: IsDayInRange('Tuesday', 'Tuesday') returns true
+        #
+        # This helper centralizes day-range parsing, ensuring consistent behavior
+        # throughout the scheduler and making schedule definitions more intuitive.
+        #
+        # The implementation uses a day-of-week index array to handle ranges efficiently,
         try {
             if ([string]::IsNullOrWhiteSpace($range)) {
                 Write-Host "Warning: Empty day range specified"
@@ -1718,10 +2212,43 @@ class SchedulerScreenSaver {
 
     [void]UpdatePersonTaskDisplays() {
         # UpdatePersonTaskDisplays
-        # Rebuilds person panels shown under the main panel. For each unique person
-        # the method collects tasks assigned to them today (including injected tasks),
-        # creates a compact panel showing time and short title, and grays-out completed tasks.
-        # This keeps the UI in sync with rotation state and today's tasks.
+        # This method creates and manages the individual task panels that appear under the main display.
+        # It's called whenever tasks change to keep the UI synchronized with the current state.
+        #
+        # The method performs these key functions:
+        #
+        # 1. Collects all tasks for today from TodaysTasks hashtable
+        #    - Includes both scheduled and injected tasks
+        #    - Resolves the assigned person for each task
+        #    - Groups tasks by person for panel creation
+        #
+        # 2. Creates a visual panel for each unique person:
+        #    - Panel has a header with person's name
+        #    - Lists all tasks with times and descriptions
+        #    - Completed tasks are shown in gray
+        #    - Pending tasks are shown in white
+        #
+        # 3. Arranges panels in a 3-column layout:
+        #    - Maximum of 2 panels per column (6 total)
+        #    - Panels are sized based on number of tasks
+        #    - Layout is responsive to content
+        #
+        # 4. Manages panel lifecycle:
+        #    - Removes existing panels before creating new ones
+        #    - Stores panels in PersonTaskPanels hashtable
+        #    - Handles errors gracefully for individual panels
+        #
+        # The UI design ensures:
+        # - Each child can quickly see their own schedule
+        # - Parents can monitor all tasks at a glance
+        # - Visual feedback shows task completion status
+        # - Rotating tasks show the correct assigned person
+        #
+        # This method is called during initialization and whenever:
+        # - Tasks are loaded or reloaded
+        # - Tasks are completed
+        # - Rotation assignments change
+        # - Tasks are injected for testing
         try {
             # Build panels exclusively from today's task instances (TodaysTasks) so assignments match runtime state
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
@@ -1789,6 +2316,8 @@ class SchedulerScreenSaver {
             $countCol1 = 0
             $countCol2 = 0
             $countCol3 = 0
+
+            # Build panels for each person            
             foreach ($person in $uniquePersons) {
                 try {
                     $personTasks = $personMap[$person]
@@ -1827,6 +2356,7 @@ class SchedulerScreenSaver {
                     $nameLabel.Location = [Point]::new(10, 10)
                     $panel.Controls.Add($nameLabel)
                     $yPos = 40
+                    # Add each task line
                     foreach ($taskEntry in $personTasks) {
                         try {
                             $taskLabel = [Label]::new()
