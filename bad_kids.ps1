@@ -139,6 +139,11 @@ public class Audio
 
 [Reflection.Assembly]::LoadFile("C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\System.Speech.dll")
 
+write-host ""
+write-host "If the program starts, then hangs, then ends, it is because of a powershell crash with a stack overflow." -ForegroundColor Red
+write-host "Just start powershell and try it again.  I have a bug somewhere crashing powershell."  -ForegroundColor Red
+write-host ""
+
 $fileName = "bad_kids_class.ps1"
 $filePath = Join-Path -Path $PSScriptRoot -ChildPath $fileName
 . $filePath
