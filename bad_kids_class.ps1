@@ -144,7 +144,7 @@ class SchedulerScreenSaver {
     [bool]$IsShowingAlert = $false
     [DateTime]$AlertEndTime
     [DateTime]$CurrentDate  # New: Current date for scheduling (can be modified for debugging)
-    [bool]$TimerRunning = $true
+    [bool]$ShouldTimerTickFire = $true
 
     SchedulerScreenSaver([bool]$debug = $false) {
         try {
@@ -162,18 +162,7 @@ class SchedulerScreenSaver {
             }
             $this.InitializeComponents()
             $this.LoadSchedule()
-            $this.InitializeTimer()
-            Write-Host "Showing the Form"
-            $this.Form.ShowDialog()
-        }
-        catch {
-            Write-Host "FATAL ERROR in SchedulerScreenSaver constructor: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
-            throw
-        }
-    }
-
-    [void]InitializeForm() {
-        try {
+            
             Write-Host "Initializing form (Debug Mode: $($this.DebugMode))"
             $this.Form = [Form]::new()
             $this.Form.Text = "Scheduler Screen Saver"
@@ -193,15 +182,27 @@ class SchedulerScreenSaver {
         
             $this.Form.BackColor = [Color]::Black
             $this.Form.KeyPreview = $true
-            $this.Form.tag = $this
-            $this.Form.Add_KeyDown({ 
-                    param($s, $e) 
-                    $scheduler = $s.tag 
+            $this.Form.tag = $this 
 
-                
-                    write-host "$($scheduler.DebugMode)"
+            $this.Form.Add_MouseClick({
+                    param($s, $e)
+                    $s.tag.CleanupAndExit()
+                    $s.Close()
+                })
 
-                    try {
+            # Add Form Shown event handler to prepare the screen without starting the timer
+            $this.Form.Add_Shown({
+                    param($sender, $e)
+                    Write-Host "Form shown, preparing screen without timer"
+                    
+                    # Add the key event handler now that the form is fully shown
+                    $sender.Add_KeyDown({
+                        param($s, $e)
+                        $scheduler = $s.tag
+                        
+                        write-host "$($scheduler.DebugMode)"
+                        
+                        try {
                         if ($e.KeyCode -eq [Keys]::Escape) { 
                             $s.tag.CleanupAndExit()
                             $s.Close()
@@ -233,43 +234,45 @@ class SchedulerScreenSaver {
                             $scheduler.UpdatePersonTaskDisplays()
                             $scheduler.UpdateNextTaskDisplay()
                         }
-                        elseif ($e.KeyCode -eq [Keys]::S) {
-                            if ($scheduler.TimerRunning) {
-                                $scheduler.Timer.Interval = 300000  # 5 minutes instead of 5 seconds
-                                Write-Host "Timer interval increased to 5 minutes for debugging"
-                            }
-                        }
-                        elseif ($e.KeyCode -eq [Keys]::R) {
-                            $scheduler.Timer.Interval = 5000  # Reset to 5 seconds
-                            Write-Host "Timer interval reset to 5 seconds"
-                        }
-
-                        elseif ($e.KeyCode -eq [Keys]::W) {
+                        elseif ($e.KeyCode -eq [Keys]::Q) {
                             # Inject a wisdom quote in 30 seconds
                             $s.tag.InjectContentTaskIn30Seconds('quotes')
                         }
-                        elseif ($e.KeyCode -eq [Keys]::Q) {
+                        elseif ($e.KeyCode -eq [Keys]::S) {
                             # Inject a story in 30 seconds
                             $s.tag.InjectContentTaskIn30Seconds('story')
                         }
-                    }
-                    catch {
-                        Write-Host "KeyDown handler error: $($_.Exception.Message)"
-                    }
-                })
-            # Add mouse click handler
-            $this.Form.Add_MouseClick({
-                    param($s, $e)
-                    $s.tag.CleanupAndExit()
-                    $s.Close()
-                })
 
+                        }
+                        catch {
+                            Write-Host "ERROR in key handler: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+                        }
+                    })
+                    
+                    $sender.tag.PrepareScreenBeforeTimer()
+                    Write-Host "Screen preparation complete - timer not started"
+                    $sender.tag.InitializeTimer()
+                })
+ 
+                
+            # Add controls to form in order: clock, art, then main panel
+            $this.Form.Controls.AddRange(@(
+                    $this.ClockBox,
+                    $this.ArtBox,
+                    $this.MainPanel,
+                    $this.AlertTextBox
+                ))
+                
+            $this.Form.ShowDialog()
         }
         catch {
-            Write-Host "ERROR in InitializeForm: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            Write-Host "FATAL ERROR in SchedulerScreenSaver constructor: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
             throw
         }
     }
+    
+
+
 
     [void]InitializeControls() {
         write-host "Initializing controls"
@@ -388,17 +391,9 @@ class SchedulerScreenSaver {
     [void]InitializeComponents() {
         write-host "Initializing components"
         try {
-            $this.InitializeForm()
             $this.InitializeSpeech()
             $this.InitializeControls()
 
-            # Add controls to form in order: clock, art, then main panel
-            $this.Form.Controls.AddRange(@(
-                    $this.ClockBox,
-                    $this.ArtBox,
-                    $this.MainPanel,
-                    $this.AlertTextBox
-                ))
             # Initialize person task panels
             $this.PersonTaskPanels = @{}
         }
@@ -466,6 +461,7 @@ class SchedulerScreenSaver {
     [void]InitializeTimer() {
         try {
             Write-Host "Initializing timer"
+            $this.ShouldTimerTickFire = $false
             $this.Timer = [Timer]::new()
             $this.Timer.Interval = 5000
             $this.Timer.tag = $this
@@ -473,7 +469,7 @@ class SchedulerScreenSaver {
                     param($sender, $e)
                     write-host "Timer tick real event"
                     try {
-                        if ($sender.tag.TimerRunning) {
+                        if ($sender.tag.ShouldTimerTickFire) {
                             # Check our explicit state
                             $sender.tag.OnTimerTick() 
                         }
@@ -482,8 +478,9 @@ class SchedulerScreenSaver {
                         Write-Host "UNHANDLED ERROR in Timer Tick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
                     }
                 })
+            # Timer will be started after the form is loaded
             $this.Timer.Start()
-            $this.TimerRunning = $true
+            $this.ShouldTimerTickFire = $true
         }
         catch {
             Write-Host "ERROR in InitializeTimer: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
@@ -594,20 +591,13 @@ class SchedulerScreenSaver {
        
         Write-Host "Timer tick"
 
-        if (-not $this.TimerRunning) {
+        if (-not $this.ShouldTimerTickFire) {
             # Add this check
             return
         }
     
-        #$this.Timer.Stop()
-        $this.TimerRunning = $false
 
-        if (-not $this.Form -or -not $this.MainPanel) {
-            Write-Host "Critical UI components not initialized"
-            #$this.TimerRunning = $true
-            #this.Timer.Start()            
-            return
-        }
+        $this.ShouldTimerTickFire = $false
 
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
@@ -622,9 +612,35 @@ class SchedulerScreenSaver {
         catch {
             Write-Host "ERROR in OnTimerTick: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
         }
-        $this.TimerRunning = $true
-        #$this.Timer.Start()
+        $this.ShouldTimerTickFire = $true
+
     }
+
+    
+    [void]PrepareScreenBeforeTimer() {
+        try {
+            Write-Host "Preparing screen before timer starts"
+
+            # Get current time
+            $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
+
+            # Run all the important tasks from OnTimerTick
+            $this.CheckScheduleChanges()
+            $this.UpdateClockAndArt($now)
+            $this.UpdateTimeDisplay($now)
+            $this.HandleAlertTimeout($now)
+            $this.CheckScheduledTasks()
+            $this.UpdatePersonTaskDisplays()
+            $this.MoveMainPanel()
+
+            Write-Host "Screen preparation completed - all data loaded and displayed"
+        }
+        catch {
+            Write-Host "ERROR in PrepareScreenBeforeTimer: $($_.Exception.Message)`n$($_.Exception.StackTrace)"
+            throw
+        }
+    }
+
 
     [void]CheckScheduleChanges() {
         # CheckScheduleChanges is a method that checks for changes in the schedule file and reloads tasks if needed.
@@ -808,16 +824,19 @@ class SchedulerScreenSaver {
         # If an error occurs during the process, it writes an error message and continues.
 
         write-host "Updating time display"
-        write-host "Updating time display"
         try {
             if ($this.LastScheduleLoad.Date -ne $now.Date) {
                 Write-Host "New day detected - reloading schedule"
+                $this.CurrentDate = $now.Date
+                Write-Host "Debug: Advanced date to $($this.CurrentDate.ToString('yyyy-MM-dd'))"
                 $this.LoadSchedule()
+                $this.UpdatePersonTaskDisplays()
+                $this.UpdateNextTaskDisplay()
             }
         
-            if ($this.LastTaskLabel.Text.Equals("Please wait...", [System.StringComparison]::InvariantCultureIgnoreCase)) {
-                $this.LastTaskLabel.Text = "Last: No Previous Tasks"
-            }
+            #if ($this.LastTaskLabel.Text.Equals("Please wait...", [System.StringComparison]::InvariantCultureIgnoreCase)) {
+            #    $this.LastTaskLabel.Text = "Last: No Previous Tasks"
+            #}
 
             $this.DateLabel.Text = $now.ToString("dddd, MMMM dd, yyyy")
             $this.TimeLabel.Text = $now.ToString("h:mm:ss tt")
@@ -1410,6 +1429,7 @@ class SchedulerScreenSaver {
     }
 
     [void]InjectContentTaskIn30Seconds([string]$contentAction) {
+        
         # Inject a content task (joke, story, quote) due in 30 seconds for debugging purposes
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
@@ -1435,7 +1455,9 @@ class SchedulerScreenSaver {
                 Called         = $false
                 AssignedPerson = $null
             }
+
             Write-Host "Injected content task '$action' at $($due.ToString('HH:mm:ss')) (key=$taskKey)"
+            
             # Immediately refresh UI so the injected content task appears
             try {
                 $this.UpdatePersonTaskDisplays()
@@ -1880,6 +1902,8 @@ class SchedulerScreenSaver {
                     Write-Host "HelloTimer tick error: $($_.Exception.Message)"
                 }
             })
+
+
         try {
             $now = if ($this.DebugMode) { $this.CurrentDate } else { [DateTime]::Now }
             if (-not $this.TodaysTasks) {
@@ -2038,12 +2062,12 @@ class SchedulerScreenSaver {
                             $this.SpeechSynth.Speak($speechText)
                             # Start a one-off UI timer that waits 60 seconds and then writes "hello" to the screen
                             try {
-                                if ($this.TimerRunning) {
+                                
                                     # Check main timer state before starting hello timer
                                     $helloTimer.Interval = 60000  # 60 seconds
                                     $helloTimer.Tag = $this
                                     $helloTimer.Start()
-                                }
+                                
                             }
                             catch {
                                 Write-Host "Failed to start hello timer: $($_.Exception.Message)"
@@ -2457,3 +2481,5 @@ class SchedulerScreenSaver {
         }
     }
 }
+
+
